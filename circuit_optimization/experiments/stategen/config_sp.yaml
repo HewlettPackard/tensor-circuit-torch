@@ -1,0 +1,49 @@
+circuit:
+  Nmax: 5
+  num_channels: 5
+  num_layers: 25
+  layer_depth: 1.
+  J_init: 0.015
+  U: .25
+  gamma: 0.1
+
+initial_state:
+  alpha: 1.0
+  random_phase: false
+  num_batch: 400
+
+lom_weights:
+  no_mask: false
+  weight_off_diag: 1.
+  entropy_weight: 0.0
+  norm_weight: .1
+  weight_zero: .1
+  weight_one: 1.
+  weight_high: 1.
+  g2_weight: 0.9
+
+# the target states
+target_state:
+  state: 'single_photon'
+  cat_target:
+    alpha: 1.
+    phase: 'odd'
+
+  NOON_target:
+    N: 1
+    phase: 'even'
+
+  single_photon_target:
+
+
+optimization:
+  lr: 0.05
+  num_epoch: 100
+  epoch_print: 1
+  to: "cuda:4"
+  modes: 'None'
+  ratio_lims: [0., 3.1416]
+
+tebd_mps_options:
+  cutoff: 1E-6
+  max_BD: 500

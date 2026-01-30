@@ -1,0 +1,27 @@
+circuit:
+  Nmax: 10
+  num_channels: 5
+  num_layers: 16
+  layer_depth: 1.0
+  J_init: 0.3
+  U: 0.08
+  gamma: 0.0
+initial_state:
+  alpha: 1.0
+  random_phase: false
+  num_batch: 2
+lom_weights: null
+optimization:
+  i_check: -1
+  lr: 0.2
+  entropy_weight: 0.01
+  num_epoch: 150
+  epoch_print: 1
+  to: cpu
+  modes: 0
+  ratio_lims:
+  - 0.0
+  - 3.1416
+tebd_mps_options:
+  cutoff: 1E-12
+  max_BD: 150

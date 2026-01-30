@@ -1,0 +1,49 @@
+circuit:
+  Nmax: 5
+  num_channels: 3 # overwritten in CLI
+  num_layers: 25 # overwritten in CLI
+  layer_depth: 1 # overwritten in CLI
+  J_init: 0.01
+  U: .25 # overwritten
+  gamma: 0.0
+
+initial_state:
+  alpha: 1.0
+  random_phase: false
+  num_batch: 1
+
+lom_weights:
+  no_mask: false
+  weight_off_diag: 1.
+  entropy_weight: 0.005
+  norm_weight: 1.
+  weight_zero: .1
+  weight_one: 1.
+  weight_high: 1.
+  g2_weight: 0.
+
+# the target states
+target_state:
+  state: 'cat'
+  cat_target:
+    alpha: 1.
+    phase: 'odd'
+
+  NOON_target:
+    N: 1
+    phase: 'even'
+
+  single_photon_target:
+
+
+optimization:
+  lr: 0.1
+  num_epoch: 150
+  epoch_print: 1
+  to: "cpu"
+  modes: 'None'
+  ratio_lims: [0., 3.1416]
+
+tebd_mps_options:
+  cutoff: 1E-12
+  max_BD: 5000 # max BD irrelevant

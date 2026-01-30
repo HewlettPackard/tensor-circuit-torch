@@ -1,0 +1,34 @@
+# data types
+
+*.csv
+*.parquet
+*.xlsx
+*.npy
+*.pkl
+*.gds
+
+# gds and log
+
+*.log
+
+# ignore pictures
+*.png
+*.jpeg
+*.jpg
+
+# ignore output files
+*.out
+
+# ignore venv
+*venv
+
+# ignore MPS data
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ignore profiling
+*.prof
+
