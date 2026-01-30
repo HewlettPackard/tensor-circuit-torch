@@ -32,3 +32,6 @@ __pycache__/
 # ignore profiling
 *.prof
 
+# ignore all data directories anywhere
+**/data/**
+
