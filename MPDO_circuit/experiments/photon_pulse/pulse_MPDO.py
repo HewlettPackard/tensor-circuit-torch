@@ -65,7 +65,7 @@ def plot_results(z, densities, a_expect, entanglement_entropy, purity_entropy, t
         't_samples': t_samples
         }
     
-    dict_filename = os.path.join(dir, 'data')
+    dict_filename = os.path.join(dir, 'data.pkl')
     with open(dict_filename, "wb") as f:
         pickle.dump(dict_result, f)
     
