@@ -13,7 +13,7 @@ from datetime import datetime
 from src.mpdo_circuit import MPDOCircuit
 from src.mpdo_torch import StateCreator, MPDOtorch
 from src.utils import BosonOperatorsTorch, eye_like
-from src.create_circuit import create_nonlinear_photonic_circuit, create_phase_circuit, amplitude_damping_krauss_ops
+from src.create_circuit import create_nonlinear_photonic_circuit, create_phase_circuit, amplitude_damping_kraus_ops
 from src.mpdo_optimizer import epoch_optimize, sweeping_optimize
 from src.tracker import Tracker
 from experiments.phase_sensing.sensing_utils import (
@@ -102,7 +102,7 @@ def iter_func(
     rho_dtheta = rho.clone()
 
     # amplitude Krauss op
-    K_ops = amplitude_damping_krauss_ops(d_theta * 2., Nmax=rho.Nmax, device=rho.device)
+    K_ops = amplitude_damping_kraus_ops(d_theta * 2., Nmax=rho.Nmax, device=rho.device)
     rho_dtheta[-1] = torch.einsum("ij, bkjl->bkil", K_ops[0], rho_dtheta[-1])
     rho_dtheta.canonical_form(options=options_MPDO)
 

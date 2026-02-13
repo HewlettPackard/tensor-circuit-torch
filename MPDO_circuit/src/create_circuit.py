@@ -46,12 +46,12 @@ def create_nonlinear_photonic_circuit(
         dt_krauss = dt if dt_krauss is None else dt_krauss
         K_ops = [
             None if dt is None else
-            amplitude_damping_krauss_ops(
-                0.5 * gamma * dt_d, 
+            amplitude_damping_kraus_ops(
+                gamma * dt_d, 
                 Nmax=Nmax, 
                 order=order_krauss, 
                 device=device
-            ) for dt_d in dt]
+            ) for dt_d in dt_krauss]
     else:
         K_ops = None
 
@@ -225,7 +225,7 @@ def create_haar_random_circuit(
 
 
 
-def amplitude_damping_krauss_ops(kappa: float, Nmax: int, order=1, device='cpu'):
+def amplitude_damping_kraus_ops(kappa: float, Nmax: int, order=1, device='cpu'):
     
     # the boson operators
     ops = BosonOperatorsTorch(Nmax, device=device)
@@ -243,7 +243,7 @@ def amplitude_damping_krauss_ops(kappa: float, Nmax: int, order=1, device='cpu')
 
     return K_ops
 
-def qubit_krauss_ops(gamma: float, device='cpu', is_hermitian: bool=False):
+def qubit_kraus_ops(gamma: float, device='cpu', is_hermitian: bool=False):
     
     # the qubit operators
     ops = QubitOperatorTorch(device=device)

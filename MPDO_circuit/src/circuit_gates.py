@@ -276,7 +276,7 @@ class NonlinearCouplingGate(CircuitGateTwoSite):
 
 class HaarCouplingGate(CircuitGateTwoSite):
 
-    def __init__(self, Nmax=1, device: str="cuda:0"):
+    def __init__(self, Nmax: int=1, device: str="cuda:0"):
 
         self.Nmax = Nmax
         self.device = device

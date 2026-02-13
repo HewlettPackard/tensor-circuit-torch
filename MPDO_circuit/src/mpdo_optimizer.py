@@ -19,7 +19,8 @@ def epoch_optimize(
         iter_alternate: int|None = None,
         obj_params: List[torch.Tensor]|None=None,
         param_lims: List[float]|None=None,
-        epoch_optim_clear: int = None
+        epoch_optim_clear: int = None,
+        scheduler: torch.optim.lr_scheduler._LRScheduler|None=None
     ) -> None:
 
 
@@ -104,6 +105,11 @@ def epoch_optimize(
             if optimizer_alt is not None:
                 if epoch % 3 == 0:
                     optimizer_alt.state.clear()
+
+        # step scheduler
+        if scheduler is not None:
+            scheduler.step()
+
 
 
         # Print debug info

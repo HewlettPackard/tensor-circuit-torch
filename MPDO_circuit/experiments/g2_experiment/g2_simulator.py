@@ -4,6 +4,7 @@ import yaml
 import numpy as np
 import time
 from scipy.linalg import sqrtm
+from datetime import datetime
 import torch
 import torch.autograd.profiler as profiler
 import matplotlib.pyplot as plt
@@ -18,6 +19,13 @@ import numpy as np
 
 from src.svd_trunc import svd_trunc
 from src.utils import irescale, iregroup, sqrtm
+from src.CLI_utils import get_CLI_input
+
+# script path
+FILE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# timestamp for data storage
+TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
 
 
 Mc = lambda k: 1.6114 + 0.037 * k  # (photonic mode approximated as a straight line)
@@ -139,6 +147,36 @@ def plot_data(ks, densities, g2s, Us, wk, ex_frac, coupling, g2_max=2., suptitle
 
 
 
+def CLI_overwrite(hg, gamma, phi, writedir, device):
+
+    """
+    Overwrite the relevant parameters with CLI input
+    """
+
+    hg = get_CLI_input(
+        '--hg', type=float, default=hg
+        )
+
+    gamma = get_CLI_input(
+        '--gamma', type=float, default=gamma
+        )
+    
+    phi = get_CLI_input(
+        '--phi', type=float, default=phi
+        )
+    
+    writedir = get_CLI_input(
+        '--writedir', type=str, default=writedir
+        )
+    
+    device = get_CLI_input(
+        '--device', type=str, default=device
+        )
+    
+    return hg, gamma, phi, writedir, device
+
+
+
 
 if __name__ == "__main__":
 
@@ -148,28 +186,34 @@ if __name__ == "__main__":
 
     num_channels = 6
     Nmax = 20
-    hg_ex = 10 # ueV * um^2
+    hg_ex = 20 # ueV * um^2: CLI overwritten
     coupling_gauge = np.pi / 6 # the reference tunneling rate (for k[0], photonic regime)
     layer_length = 200 # um
     num_layers = 5
     pulse_duration = 1 # ps
     pulse_transverse = 0.5 # um
-    gamma = 0.0 # loss rate (zero for now)
+    gamma = 0.02 # loss rate (1/ps): CLI overwritten
 
     # initial state
     n0, nL = 1., 1.
-    rel_theta = np.pi / 3
+    rel_phi = np.pi / 3 # relative phase shift pulses: CLI overwritten
     n_Fock = [1,1,1,1,1] # for testing with single photon input
     is_coherent = True
     n_eps_g2 = 1e-10
     g2_max = None
+
+    # to store results
+    writedir = os.path.join(FILE_DIR, "data", TIMESTAMP)
+
+    # overwrite by CLI
+    hg_ex, gamma, rel_phi, writedir, device = CLI_overwrite(hg_ex, gamma, rel_phi, writedir, device)
 
 
 
     # PREPARE INITIAL STATE
     dict_rhos = {}
     alphas = [0.] * num_channels
-    alphas[0], alphas[-1] = np.sqrt(n0), np.sqrt(nL) * np.exp(1j * rel_theta)
+    alphas[0], alphas[-1] = np.sqrt(n0), np.sqrt(nL) * np.exp(1j * rel_phi)
 
     # initialize input state
     state_creator = StateCreator(Nmax, num_batch=1)
@@ -194,6 +238,11 @@ if __name__ == "__main__":
     # gauging time scale
     dt_gauge = layer_length / vg_gauge
 
+    # create write dir
+    if not os.path.exists(writedir):
+        os.makedirs(writedir)
+
+
     # loop over k-values
     for i, k in enumerate(ks):
     
@@ -213,7 +262,7 @@ if __name__ == "__main__":
             num_layers = num_layers,
             U = U, 
             J =  coupling_gauge / dt_gauge,
-            gamma = gamma / dt_gauge,
+            gamma = gamma,
             order_krauss = 1,
             dt = dt,
             Nmax = Nmax,
@@ -246,7 +295,7 @@ if __name__ == "__main__":
         ns = rho_in.number_outcomes()
         vars = rho_in.number_variances()
         g2s = rho_in.density_correlations(n_eps_g2)
-        print(rf"iteration {i}: Finished run in {time.time()-start:.2f}s, gamma={gamma / dt_gauge * dt:.2f}, vg={vg:.2f}, N_tot={ns.sum().cpu().numpy()}")
+        print(rf"iteration {i}: Finished run in {time.time()-start:.2f}s, circuit time={num_layers * dt:.2f}ps, gamma={gamma:.2f}ps^-1, vg={vg:.2f}um/ps, N_tot={ns.sum().cpu().numpy()}")
         print(f"BD={rho_in.get_BDs()}, PD={rho_in.get_PDs()}\n")
 
         # store data
@@ -257,31 +306,14 @@ if __name__ == "__main__":
         U_track[i] = U
         coupling_track[i] = coupling_gauge / dt_gauge * dt
 
-
-        # print(f"iteration {i}"
-        #     rf"Properties:\n exciton fraction: {ex_frac:.2f}, "
-        #     rf"group velocity: {vg:.2f}$\\mu m\\,ps^{-1}$,"
-        #     rf"\n pulse duration: {pulse_duration:.2f}ps,"
-        #     rf"\n pulse width: {pulse_duration * vg:.2f}$\\mu m$,"
-        #     rf"\n gate duration: {layer_length / vg:.2f}ps")
-        
-
-        # print(f"BDs: {rho.get_BDs()}")
-        # print(f"PDs: {rho.get_PDs()}")
-        # print(f"dims: {[rho[i].shape for i in range(rho.num_channels)]}")
-        # print(f"densities: {ns.detach().cpu().numpy()}, N_tot={ns.sum().detach().cpu().numpy()}")
-        # print(f"g2s: {g2s.detach().cpu().numpy()}")
     suptitle = (
         rf"Results: {num_channels} WGs, {num_layers} layers of "
         rf"${layer_length:.2f}\,\mu$m, "
         rf"$\hbar g={hg_ex:.2f}\,\mu$eV$\cdot\mu$m$^2$, "
-        rf"$\theta_{{rel}}={rel_theta/np.pi:.2f}\pi$"
+        rf"$\theta_{{rel}}={rel_phi/np.pi:.2f}\pi$"
     )
-    # suptitle = rf"Results: {num_channels} WGs with {num_layers} layers of " \
-    #        rf"{layer_length:.2f}$\\mu m$\n" \
-    #        rf"interaction constant $g={g_ex:.2f} (\\mu eV \\cdot \\mu m^2)$, " \
-    #        rf"$\\theta_{{rel}}={rel_theta:.2f}$"
-    #suptitle = rf"Results: {num_channels} WGs with {num_layers} layers of {layer_length:.2f}$\mu m$\n, interaction constant $g={g_ex:.2f} (\mu eV \cdot \mu m^2)$, $\theta_rel={rel_theta:.2f}"
+ 
+
     plot_data(
         ks,
         ns_track, 
@@ -291,4 +323,35 @@ if __name__ == "__main__":
         ex_frac = exciton_fraction(ks), 
         coupling = coupling_track,
         suptitle=suptitle,
-        g2_max=2)
+        g2_max=2,
+        figname=os.path.join(writedir, "results.png")
+        )
+    
+    # save results as pkl
+    d_results = {}
+    d_results['ks'] = ks
+    d_results['g2s'] = g2s_track
+    d_results['ns'] = ns_track
+    d_results['Uk'] = U_track
+    d_results['coupling_k'] = coupling_track
+    d_results['ex_frac'] = exciton_fraction(ks)
+    d_results['wk'] = omega_LP(ks)
+    d_results['vgk'] = vg_LP(ks)
+    # d_results['BDs'] = rho_in.get_BDs()
+    # d_results['PDs'] = rho_in.get_PDs()
+    # d_results['SvN'] = rho_in.entropy_profile(entropy='entanglement')
+    # d_results['SP'] = rho_in.entropy_profile(entropy='purity')
+    d_results['parameters'] = {
+        'num_channels': num_channels,
+        'num_layers': num_layers,
+        'Nmax': Nmax,
+        'hg_ex': hg_ex, 
+        'gamma': gamma,
+        'alphas': alphas
+    }
+
+
+    file_pkl = os.path.join(writedir, f'results.pkl')
+    with open(file_pkl, 'wb') as fp:
+        pickle.dump(d_results, fp)
+        print(f'Results saved successfully in {file_pkl}\n')
