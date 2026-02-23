@@ -141,7 +141,7 @@ class MPDOCircuit:
         
         J_matrix = [
             [
-                self.circuit_topology[d,l].J# * self.circuit_topology[d,l].dt
+                self.circuit_topology[d,l].J * self.circuit_topology[d,l].dt
                 if isinstance(self.circuit_topology[d,l], NonlinearCouplingGate)
                 else None
                 for l in range(self.num_channels)

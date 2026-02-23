@@ -84,7 +84,8 @@ def epoch_optimize(
             # Adam / SGD / other first-order optimizers
             optimizer_run.zero_grad()
 
-            rho_run_local = rho.clone()  # avoid in-place side-effects
+            with torch.no_grad():
+                rho_run_local = rho.clone()  # avoid in-place side-effects
 
             loss = objective(epoch, rho_run_local, obj_params, do_tracking=True)
 
@@ -192,7 +193,9 @@ def sweeping_optimize(
 
                 final_optimizer.zero_grad()
 
-                rho_run_local = rho.clone()  # avoid in-place side-effects
+                with torch.no_grad():
+                    rho_run_local = rho.clone()  # avoid in-place side-effects
+
                 loss = objective(sweep, rho_run_local, obj_params, do_tracking=False)
 
                 if torch.isnan(loss):

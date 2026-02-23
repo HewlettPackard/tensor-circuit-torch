@@ -16,8 +16,8 @@ def create_nonlinear_photonic_circuit(
         dt: float|List[float] = 1.,
         gamma: float = 0.,
         device: str = "cuda:0",
-        dt_krauss: List[float]|None=None,
-        order_krauss: int=1,
+        dt_kraus: List[float]|None=None,
+        order_kraus: int=1,
         requires_grad: bool=True,
         right_stop: int|None = None
     ) -> MPDOCircuit:
@@ -41,17 +41,17 @@ def create_nonlinear_photonic_circuit(
     if not isinstance(dt, List):
         dt = [dt] * num_layers
 
-    # create amplitude damping Krauss operators
+    # create amplitude damping Kraus operators, up to the order specified
     if gamma > 0.0001:
-        dt_krauss = dt if dt_krauss is None else dt_krauss
+        dt_kraus = dt if dt_kraus is None else dt_kraus
         K_ops = [
-            None if dt is None else
+            None if dt_d is None else
             amplitude_damping_kraus_ops(
                 gamma * dt_d, 
                 Nmax=Nmax, 
-                order=order_krauss, 
+                order=order_kraus, 
                 device=device
-            ) for dt_d in dt_krauss]
+            ) for dt_d in dt_kraus]
     else:
         K_ops = None
 
@@ -112,6 +112,7 @@ def create_nonlinear_bosonic_TEBD_step(
         Nmax: int,
         dt: float|List[float] = 1.,
         gamma: float = 0.,
+        order_kraus: int=1,
         device: str = "cuda:0",
         requires_grad: bool=False
     ) -> MPDOCircuit:
@@ -122,7 +123,8 @@ def create_nonlinear_bosonic_TEBD_step(
         J=J, U=U, gamma=gamma, Nmax=Nmax,
         device=device, 
         dt=[dt/2., dt, dt/2.],
-        dt_krauss=[None, None, dt],
+        dt_kraus=[None, None, dt],
+        order_kraus=order_kraus,
         requires_grad=requires_grad
     )
 

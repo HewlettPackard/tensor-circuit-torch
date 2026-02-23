@@ -13,7 +13,7 @@ from src.mpdo_torch import (
 
 from src.utils import BosonOperatorsTorch
 
-from experiments.LP_utils import vg_LP, curvature_LP
+from experiments.LP_utils import vg_LP, curvature_LP, exciton_fraction
 
 hbar_ueV_ps = 6.582 * 1e2 # hbar, units ueV * ps, converting energy to frequency
 
@@ -74,29 +74,31 @@ def plot_results(z, densities, a_expect, entanglement_entropy, purity_entropy, t
 
 if __name__ == "__main__":
 
-    device = 'cuda:1'
+    device = 'cuda:2'
     store_device = 'cpu'
-    dir_store = 'field_nonlinear_loss'
+    dir_store = 'field_loss_2ph'
 
     zmax = 200. # grid -zmax <-> + zmax, in um
     nz = 401 # number of subdivisions
     Nmax = 5
 
-    pulse_duration = 1 # ps
-    pulse_intensity = 2 # average number of photons (Poissonian)
-    hg = 10. # ueV * um
+    pulse_duration = 1. # ps
+    pulse_intensity = 2. # average number of photons (Poissonian)
+    hg = 1400. # ueV * um
     gamma = 0.05 # ps^(-1)
-    x_prop = 500 # um
+    x_prop = 500. # um
     ref_k = .3 # um^{-1}
 
     is_coherent = True
 
     dt = 0.05
+    order_kraus = 1 # the number of photon clicks to into account per time interval (default is max. 1)
     num_samples = 11
     options_MPDO = {'max_BD': 50, 'max_PD': 50, 'cutoff_BD': 1e-8, 'cutoff_PD': 1e-5}
 
     group_velocity = vg_LP(ref_k) # in um / ps
     J = 0.5 * curvature_LP(ref_k) # important: factor 2 (?) -> quite sure
+    ex_frac = exciton_fraction(ref_k)
     t_max = x_prop / group_velocity
     t_samples = torch.linspace(0, t_max, num_samples) # in ps
 
@@ -128,7 +130,7 @@ if __name__ == "__main__":
 
     # rescale parameters with differential element
     J_dz = J / dz ** 2
-    U_dz = hg / hbar_ueV_ps / dz
+    U_dz = (hg / hbar_ueV_ps) / dz # * ex_frac ** 2
 
     # create circuit
     TEBD_step = create_nonlinear_bosonic_TEBD_step(
@@ -138,6 +140,7 @@ if __name__ == "__main__":
         Nmax=Nmax,
         dt=dt,
         gamma=gamma,
+        order_kraus=order_kraus,
         device=device,
         requires_grad=False
     )

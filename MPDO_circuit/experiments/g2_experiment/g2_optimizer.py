@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Dict, List, Any
 import torch
 import torch.autograd.profiler as profiler
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 # plt.rcParams['text.usetex'] = True
 
@@ -17,6 +18,7 @@ from src.mpdo_torch import StateCreator, MPDOtorch
 from src.utils import BosonOperatorsTorch, eye_like
 from src.create_circuit import create_nonlinear_photonic_circuit, create_phase_circuit
 from src.tracker import Tracker
+from src.visualize import visualize_circuit
 
 import numpy as np
 
@@ -126,6 +128,7 @@ def iter_func(
     it: int,
     obj_params: List[Any],
     weight_intensity: float,
+    target_intensity: float=0.01,
     do_tracking: bool=True
     ):
 
@@ -145,10 +148,11 @@ def iter_func(
     for il, (n, g2) in enumerate(zip(ns, g2s)):
         tracker.add(f'n_{il}', n)
         tracker.add(f'g2_{il}', g2)
+        tracker.add('couplings', circuit.get_coupling_matrix())
 
     #weight = weight_intensity * (1. - g2s[idx_signal])
-    weight = weight_intensity
-    FOM = (1.-weight) * g2s[idx_signal] + weight * torch.abs(.1 - ns[idx_signal]) ** 2
+    weight = weight_intensity * np.minimum(it/100, 1.)
+    FOM = (1.-weight) * g2s[idx_signal] + weight * (F.relu( target_intensity - ns[idx_signal]) / target_intensity)
     tracker.add('FOM', FOM)
 
     # visuals
@@ -164,6 +168,13 @@ def iter_func(
         [f'g2_{il}' for il in range(rho.num_channels)], 
         filename=os.path.join(SAVE_DIR, 'g2s.png'))
     
+    # visualization of circuit
+    
+    visualize_circuit(
+        circuit.get_coupling_matrix(), 
+        filename=os.path.join(SAVE_DIR, "circuit")
+        )
+    
     # store data until last run
     tracker.save(os.path.join(SAVE_DIR, 'data.pkl'))
 
@@ -175,12 +186,12 @@ def iter_func(
 
 if __name__ == "__main__":
 
-    device = "cuda:0"
+    device = "cuda:4"
     k = 0.3 # um^-1
     
-    num_channels = 6
+    num_channels = 4
     Nmax = 20
-    hg_ex = 20 # ueV * um^2: CLI overwritten
+    hg_ex = 10 # ueV * um^2: CLI overwritten
     coupling_gauge = np.pi / 4 # the reference tunneling rate (for k[0], photonic regime)
     layer_length = 200 # um
     num_layers = 5
@@ -195,12 +206,13 @@ if __name__ == "__main__":
     is_coherent = True
     n_eps_g2 = 1e-10
     g2_max = None
+    target_intensity = 0.01
 
     # options
     options_ADAM = {
-        'lr': 5e-3, 'lr_min': 1e-4, 'max_epochs': 100, 'param_lims': [0, np.pi], 'weight_intensity': .1
+        'lr': 1.5e-3, 'lr_min': 1e-4, 'max_epochs': 100, 'param_lims': [0, np.pi], 'weight_intensity': .4
         }
-    options_MPDO = {'max_BD': 100, 'max_PD': 100, 'cutoff_BD': 1e-9, 'cutoff_PD': 1e-9}
+    options_MPDO = {'max_BD': 100, 'max_PD': 100, 'cutoff_BD': 1e-9, 'cutoff_PD': 1e-5}
 
     # to store results
     writedir = os.path.join(FILE_DIR, "data", TIMESTAMP)
@@ -248,7 +260,7 @@ if __name__ == "__main__":
         U = U, 
         J =  coupling_gauge / dt,
         gamma = gamma,
-        order_krauss = 1,
+        order_kraus = 1,
         dt = dt,
         Nmax = Nmax,
         num_channels = num_channels,
@@ -263,6 +275,10 @@ if __name__ == "__main__":
 
     # create circuits
     circuit = create_nonlinear_photonic_circuit(**d, device=device)
+    J_matrix = [
+        [coupling if coupling is not None else None for coupling in layer_couplings] 
+        for layer_couplings in circuit.get_coupling_matrix(float_vals=False)
+        ]
 
 
     # get the circuit variables
@@ -281,6 +297,7 @@ if __name__ == "__main__":
         tracker=tracker, it=it,
         obj_params=obj_params,
         weight_intensity=weight_intensity,
+        target_intensity=target_intensity,
         do_tracking=do_tracking
         )
     
@@ -288,8 +305,9 @@ if __name__ == "__main__":
     max_epochs = options_ADAM.pop('max_epochs')
     param_lims = options_ADAM.pop('param_lims')
     lr_min = options_ADAM.pop('lr_min')
+    J_vars = [J.detach() for J_layer in J_matrix for J in J_layer if J is not None]
     optimizer = torch.optim.Adam(
-            circuit.get_variables(), **options_ADAM
+            J_vars, **options_ADAM
         )
     if lr_min is not None:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs, eta_min=lr_min)
@@ -297,7 +315,7 @@ if __name__ == "__main__":
         scheduler = None
     
     # train the circuit for QFI
-    obj_params = [circuit.get_coupling_matrix(float_vals=False), U]
+    obj_params = [J_matrix, U]
     epoch_optimize(
         objective, 
         optimizer=optimizer, 
