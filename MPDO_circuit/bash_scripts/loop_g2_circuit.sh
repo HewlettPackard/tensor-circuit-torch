@@ -6,12 +6,16 @@
 ###############################################################################
 
 # ───────────────────────────── Parameter space ────────────────────────────── #
-hg_list=(10 50 700) # ueV um^2: the interaction constant                    
+# hg_list=(10 50 700) # ueV um^2: the interaction constant                    
+# hg_list=(0.0 10.0 20.0 30.0 40.0 50.0 60.0 70.0 80.0 90.0 100.0 700.0) # ueV um^2: the interaction constant   
+# hg_list=(200. 300. 400. 500. 600.)  
+hg_list=(3.3 16.6 233.3)  
 gamma_list=(0.00 0.02 0.04 0.06 0.08 0.10) #  ps^-1 : the decay rate per picosecond
 phi_list=(0.0 0.2 0.4 0.6 0.8 1.0) # (units of pi) : the relative pulse phase shift
 
 startdev=0 # cuda start
-command="python -m experiments.g2_experiment.g2_simulator" # the python command
+#command="python -m experiments.g2_experiment.g2_simulator" # the python command
+command="python -m experiments.g2_experiment.g2_simulator_scan_vg" # the python command
 pi=3.141592
 
 set -euo pipefail

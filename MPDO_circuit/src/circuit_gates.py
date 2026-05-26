@@ -229,8 +229,6 @@ class NonlinearCouplingGate(CircuitGateTwoSite):
 
         super().__init__(Nmax=Nmax, dt=dt, device=device)
 
-        self.Delta = Delta
-
         # define the two-mode tunneling gate
         self.tunneling_gate = -(torch.einsum('ij,kl->iklj', self.ops.ad, self.ops.a) 
             + torch.einsum('ij,kl->iklj', self.ops.a, self.ops.ad)
@@ -242,24 +240,33 @@ class NonlinearCouplingGate(CircuitGateTwoSite):
             + torch.einsum('ij,kl->iklj', self.ops.id, self.ops.n_nm1) 
         )
 
-        self.phase_gate = (
+        self.detuning_gate = -(
             torch.einsum('ij,kl->iklj', self.ops.n, self.ops.id) 
             + torch.einsum('ij,kl->iklj', self.ops.id, self.ops.n) 
         )
 
         # update the gate
-        self.update(J, U)
+        self.update(J, U, Delta)
 
 
-    def update(self, J: torch.tensor, U: torch.tensor) -> None:
+    def update(
+            self, 
+            J: torch.Tensor|None, 
+            U: torch.Tensor|None=None, 
+            Delta:torch.Tensor|None=None
+            ) -> None:
 
         """Update the gate with the actual values for J, U, dt"""
 
-        self.J = J
-        self.U = U
+        if J is not None:
+            self.J = J
+        if U is not None:
+            self.U = U
+        if Delta is not None:
+            self.Delta = Delta
 
         # define Hamiltonian as sum tunneling and interaction
-        self.H = (self.J * self.tunneling_gate + self.U * self.interaction_gate)
+        self.H = (self.J * self.tunneling_gate + self.U * self.interaction_gate + self.Delta * self.detuning_gate)
 
         # imaginary exponent for unitary gate. Reshape rank-4 tensor in matrix by joining two indices and exponentiate
         gate_tensor = torch.matrix_exp(
@@ -312,7 +319,8 @@ class NonlinearLocalGate(CircuitGateOneSite):
     """
 
     def __init__(self, Nmax: int, 
-                 U: torch.Tensor, 
+                 U: torch.Tensor,
+                 Delta: torch.Tensor, 
                  dt: float=1.,
                  device: str="cuda:0",
                  ):
@@ -321,13 +329,17 @@ class NonlinearLocalGate(CircuitGateOneSite):
 
         super().__init__(Nmax, dt, device)
 
-        self.update(U)
+        self.update(U, Delta)
 
 
-    def update(self, U: torch.Tensor):
+    def update(self, U: torch.Tensor|None=None, Delta: torch.Tensor|None=None):
 
-        self.U = U
-        self.H = 0.5 * self.U * self.ops.n_nm1
+        if U is not None:
+            self.U = U
+        if Delta is not None:
+            self.Delta = Delta
+
+        self.H = 0.5 * self.U * self.ops.n_nm1 - self.Delta * self.ops.n
         self.gate_tensor = torch.matrix_exp(-1j * self.dt * self.H)
 
 
@@ -362,11 +374,14 @@ class PhaseGate(CircuitGateOneSite):
 
         super().__init__(Nmax, dt, device)
         
-        self.phi = phi
-
-        self.H = phi * self.ops.n
-        self.gate_tensor = torch.matrix_exp(-1j * dt * self.H)
+        self.update(phi)
 
     def get_params(self):
         return [self.phi] if self.phi.requires_grad else []
+    
+    def update(self, phi: torch.Tensor):
+        self.phi = phi
+        self.H = phi * self.ops.n
+        self.gate_tensor = torch.matrix_exp(-1j * self.dt * self.H)
+
 

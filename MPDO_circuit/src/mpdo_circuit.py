@@ -68,19 +68,6 @@ class MPDOCircuit:
         self.device = self.circuit_topology.device
         # self.options = options
 
-    
-    def update(self, J_matrix: List[List[torch.Tensor|None]], U: torch.Tensor):
-
-        """Perform circuit update by updating all gate (after gradient update J-values)"""
-
-        for d, gates_layer in enumerate(self.circuit_topology):
-            for l, gate in enumerate(gates_layer):
-                if isinstance(gate, NonlinearCouplingGate): 
-                    gate.update(J_matrix[d][l], U)
-
-                if isinstance(gate, NonlinearLocalGate): 
-                    gate.update(U)
-
 
     def run(self, 
             rho: MPDOtorch, 
@@ -137,11 +124,40 @@ class MPDOCircuit:
         
         return params
     
-    def get_coupling_matrix(self, float_vals: bool=True):
+    
+class CouplerCircuit(MPDOCircuit):
+
+    """
+    The Nonlinear optical circuit with stacked layers of couplers
+    """
+
+    def __init__(
+            self, 
+            circuit_topology: CircuitTopology, 
+            K_ops: List[Iterable[torch.Tensor]]=None, 
+            ):
+        
+        super().__init__(circuit_topology, K_ops)
+
+
+    def update(self, J_matrix: List[List[torch.Tensor|None]], U: torch.Tensor|None=None):
+
+        """Perform circuit update by updating all gate (after gradient update J-values)"""
+
+        for d, gates_layer in enumerate(self.circuit_topology):
+            for l, gate in enumerate(gates_layer):
+                if isinstance(gate, NonlinearCouplingGate): 
+                    gate.update(J_matrix[d][l], U)
+
+                if isinstance(gate, NonlinearLocalGate) and U is not None: 
+                    gate.update(U)
+
+
+    def get_J_matrix(self, float_vals: bool=True):
         
         J_matrix = [
             [
-                self.circuit_topology[d,l].J * self.circuit_topology[d,l].dt
+                self.circuit_topology[d,l].J # * self.circuit_topology[d,l].dt
                 if isinstance(self.circuit_topology[d,l], NonlinearCouplingGate)
                 else None
                 for l in range(self.num_channels)
@@ -156,3 +172,58 @@ class MPDOCircuit:
                 ]
 
         return J_matrix
+    
+
+    def get_coupling_matrix(self):
+        """
+        The couplings J * dt, float values by default (not torch tensors)
+        """
+
+        return [
+            [
+                self.circuit_topology[d,l].J.item() * self.circuit_topology[d,l].dt
+                if isinstance(self.circuit_topology[d,l], NonlinearCouplingGate)
+                else None
+                for l in range(self.num_channels)
+            ]
+            for d in range(self.num_layers)
+        ]
+    
+
+class PhaseCircuit(MPDOCircuit):
+
+    """
+    The Nonlinear optical circuit with stacked layers of couplers
+    """
+
+    def __init__(
+            self, 
+            circuit_topology: CircuitTopology, 
+            K_ops: List[Iterable[torch.Tensor]]=None, 
+            ):
+        
+        super().__init__(circuit_topology, K_ops)
+
+
+    def update(self, phase_matrix: List[List[torch.Tensor|None]], U: torch.Tensor|None=None):
+
+        """Perform circuit update by updating all gate phases"""
+
+        for d, gates_layer in enumerate(self.circuit_topology):
+            for l, gate in enumerate(gates_layer):
+                gate.update(phase_matrix[d][l])
+
+
+    def get_phi_matrix(self, float_vals: bool=True):
+        
+        phi_matrix = [
+            [
+                self.circuit_topology[d,l].phi.item() if float_vals
+                else self.circuit_topology[d,l].phi
+                for l in range(self.num_channels)
+            ]
+            for d in range(self.num_layers)
+        ]
+
+        return phi_matrix
+    

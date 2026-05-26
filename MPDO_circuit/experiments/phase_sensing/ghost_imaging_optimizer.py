@@ -152,7 +152,7 @@ def iter_func(
         
         # visualization of circuit
         visualize_circuit(
-            circuit_init.get_coupling_matrix() + circuit_read.get_coupling_matrix(), 
+            circuit_init.get_J_matrix() + circuit_read.get_J_matrix(), 
             phase_shifts={'layer': circuit_init.num_layers, 'positions': phases},
             filename=os.path.join(SAVE_DIR, "circuit")
             )
@@ -319,14 +319,14 @@ if __name__ == "__main__":
 
     # extract all parameters to optimize
     obj_params = (
-        [circuit_init.get_coupling_matrix(float_vals=False)]
-        + [circuit_read.get_coupling_matrix(float_vals=False)] 
+        [circuit_init.get_J_matrix(float_vals=False)]
+        + [circuit_read.get_J_matrix(float_vals=False)] 
         + [f_U]
     )
 
     # assign the right parameters to the set of optimizers
     num_layers = num_layers_init + num_layers_read
-    coupling_matrix = circuit_init.get_coupling_matrix(float_vals=False)
+    coupling_matrix = circuit_init.get_J_matrix(float_vals=False)
     optimizers = []
     for d in range(num_layers_init):
         vars = [var for var in coupling_matrix[d] if var is not None]

@@ -74,18 +74,18 @@ def plot_results(z, densities, a_expect, entanglement_entropy, purity_entropy, t
 
 if __name__ == "__main__":
 
-    device = 'cuda:2'
+    device = 'cuda:0'
     store_device = 'cpu'
-    dir_store = 'field_loss_2ph'
+    dir_store = 'field_linear_4ph'
 
-    zmax = 200. # grid -zmax <-> + zmax, in um
-    nz = 401 # number of subdivisions
+    zmax = 300. # grid -zmax <-> + zmax, in um
+    nz = 101 # number of subdivisions
     Nmax = 5
 
     pulse_duration = 1. # ps
-    pulse_intensity = 2. # average number of photons (Poissonian)
-    hg = 1400. # ueV * um
-    gamma = 0.05 # ps^(-1)
+    pulse_intensity = 4. # average number of photons (Poissonian)
+    hg = 0*1400. # ueV * um
+    gamma = 0.0 # ps^(-1)
     x_prop = 500. # um
     ref_k = .3 # um^{-1}
 
@@ -130,13 +130,15 @@ if __name__ == "__main__":
 
     # rescale parameters with differential element
     J_dz = J / dz ** 2
-    U_dz = (hg / hbar_ueV_ps) / dz # * ex_frac ** 2
+    U_dz = (hg / hbar_ueV_ps) / dz * ex_frac ** 2
+    Delta = -2 * J_dz
 
     # create circuit
     TEBD_step = create_nonlinear_bosonic_TEBD_step(
         num_channels=nz,
         J=J_dz,
         U=U_dz,
+        Delta=Delta,
         Nmax=Nmax,
         dt=dt,
         gamma=gamma,
@@ -218,7 +220,3 @@ if __name__ == "__main__":
 
 
 
-
-
-
-    e=0

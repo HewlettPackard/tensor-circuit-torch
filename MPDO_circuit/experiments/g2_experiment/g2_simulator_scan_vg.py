@@ -8,7 +8,7 @@ from datetime import datetime
 import torch
 import torch.autograd.profiler as profiler
 import matplotlib.pyplot as plt
-
+# plt.rcParams['text.usetex'] = True
 
 from src.mpdo_circuit import MPDOCircuit
 from src.mpdo_torch import StateCreator, MPDOtorch
@@ -34,30 +34,7 @@ OM = 3.4 * 1e-3 # (half the Rabi splitting)
 hbar_eV_ps = 6.582 * 1e-4 # hbar, converting energy to frequency
 hbar_ueV_ps = 6.582 * 1e2 # hbar, converting energy to frequency
 
-def omega_LP(k: float):
 
-    """
-    Lower-polariton dispersion in eV and um!
-
-    """
-
-    LP_disp =  0.5 * (Mc(k) + Exca) - 0.5 * ((Mc(k) - Exca)**2 + 4. * OM ** 2) ** 0.5
-    return LP_disp
-
-
-def vg_LP(k: float, dk: float=1e-3):
-    """
-    Lower-polariton group velocity, in eV * um / hbar = um / ps
-    """
-    return (omega_LP(k + dk/2.) - omega_LP(k - dk/2.)) / dk / hbar_eV_ps
-
-
-def exciton_fraction(k):
-    """ 
-    The exciton fraction at given k (um^(-1))
-    """
-    theta_k = np.arctan(OM / (omega_LP(k) - Mc(k)))
-    return np.cos(theta_k) ** 2
 
 def pulse_nonlinear_rate(vg: float, pulse_width: float, g: float):
 
@@ -85,7 +62,7 @@ def pulse_nonlinear_rate(vg: float, pulse_width: float, g: float):
 
 
 
-def plot_data(ks, densities, g2s, Us, wk, ex_frac, coupling, g2_max=2., suptitle="results", figname='experiments/g2_experiment/test.png'):
+def plot_data(vgs, densities, g2s, g2_max=2., suptitle="results", figname='experiments/g2_experiment/test.png'):
     """
     Make a 3-panel plot:
     Panel 1: ns_track (each row is a line)
@@ -102,14 +79,14 @@ def plot_data(ks, densities, g2s, Us, wk, ex_frac, coupling, g2_max=2., suptitle
     fig.suptitle(suptitle, fontsize=10, y=0.98)
 
     # --- Panel 1: ns_track ---
-    ax[0].plot(ks, densities)
+    ax[0].plot(vgs, densities)
     ax[0].set_xlabel(r"k ($\mu m ^{-1}$)")
     ax[0].set_ylabel("n")
     ax[0].set_title("output densities")
     ax[0].legend(labels)
 
     # --- Panel 2: g2s_track ---
-    ax[1].plot(ks, g2s)
+    ax[1].plot(vgs, g2s)
     ax[1].axhline(y=1., color='k', alpha=0.7, linestyle="--")
     ax[1].set_xlabel(r"k ($\mu m ^{-1}$)")
     ax[1].set_ylabel(r"$g^{(2)}(0)$")
@@ -118,29 +95,9 @@ def plot_data(ks, densities, g2s, Us, wk, ex_frac, coupling, g2_max=2., suptitle
     ax[1].set_title("density-density correlations")
     # ax[1].legend(labels)
 
-    # --- Panel 3: wk & exciton fraction ---
-    ax3 = ax[2]
-    ax3.plot(ks, Us, color='b', label="$U_k$", linewidth=2)
-    ax3.set_ylabel(r"$U_k\, (ps^{-1})$")
-    
+ 
 
-    ax3b = ax3.twinx()
-    ax3b.plot(ks, ex_frac, color='r', label="exciton fraction", linestyle="--")
-    ax3b.set_ylabel("exciton fraction")
-
-    ax3.set_title("Gate nonlinearity U and exciton fraction")
     ax[2].set_xlabel(r"k ($\mu m ^{-1}$)")
-
-    # combine legends from both axes
-    lines_1, labels_1 = ax3.get_legend_handles_labels()
-    lines_2, labels_2 = ax3b.get_legend_handles_labels()
-    ax3.legend(lines_1 + lines_2, labels_1 + labels_2)
-
-    # --- Panel 4: g2s_track ---
-    ax[3].plot(ks, coupling)
-    ax[3].set_xlabel(r"k ($\mu m ^{-1}$)")
-    ax[3].set_ylabel(r"$J\cdot \Delta t$")
-    ax[3].set_title("Gate coupling")
 
     fig.tight_layout()
     fig.savefig(figname)
@@ -181,8 +138,7 @@ def CLI_overwrite(hg, gamma, phi, writedir, device):
 if __name__ == "__main__":
 
     device = "cuda:0"
-    ks = np.linspace(0., 0.3, 51) # k = [0,1], in um^-1
-    vg_gauge = vg_LP(ks[0]) # gauge gate size, time scale and coupling with the first (photonic) k-element
+    vgs = np.linspace(1., 25., 50) # um / ps: group velocities to scan
 
     num_channels = 6
     Nmax = 20
@@ -227,7 +183,7 @@ if __name__ == "__main__":
 
 
     # data to track
-    num_it = ks.size
+    num_it = vgs.size
     ns_track = np.zeros((num_it, num_channels))
     g2s_track = np.zeros((num_it, num_channels))
     wk_track = np.zeros((num_it))
@@ -235,8 +191,6 @@ if __name__ == "__main__":
     U_track = np.zeros((num_it))
     coupling_track = np.zeros((num_it))
 
-    # gauging time scale
-    dt_gauge = layer_length / vg_gauge
 
     # create write dir
     if not os.path.exists(writedir):
@@ -244,24 +198,21 @@ if __name__ == "__main__":
 
 
     # loop over k-values
-    for i, k in enumerate(ks):
+    for i, vg in enumerate(vgs):
     
         # get k-dependent values
-        wk = omega_LP(k) # omega (eV)
-        vg = vg_LP(k) # group velocity um / ps
-        ex_frac = exciton_fraction(k) # exciton hopfield coeff |uk|^2, dimensionless
         dt = layer_length / vg # the duration of one layer
         U = pulse_nonlinear_rate(
             vg=vg, 
             pulse_width=pulse_duration, 
-            g=ex_frac ** 2 * (hg_ex/pulse_transverse/hbar_ueV_ps)) # the pulse nonlinear rate
+            g=(hg_ex/pulse_transverse/hbar_ueV_ps)) # the pulse nonlinear rate
 
 
         # circuit
         d = dict(
             num_layers = num_layers,
             U = U, 
-            J =  coupling_gauge / dt_gauge,
+            J =  coupling_gauge / dt,
             gamma = gamma,
             order_kraus = 1,
             dt = dt,
@@ -301,10 +252,8 @@ if __name__ == "__main__":
         # store data
         ns_track[i,:] = ns.cpu().numpy()
         g2s_track[i,:] = g2s.cpu().numpy()
-        wk_track[i] = wk
-        ex_frac_track[i] = ex_frac
         U_track[i] = U
-        coupling_track[i] = coupling_gauge / dt_gauge * dt
+        coupling_track[i] = coupling_gauge
 
     suptitle = (
         rf"Results: {num_channels} WGs, {num_layers} layers of "
@@ -315,13 +264,9 @@ if __name__ == "__main__":
  
 
     plot_data(
-        ks,
+        vgs,
         ns_track, 
         g2s_track, 
-        U_track,
-        wk = omega_LP(ks), 
-        ex_frac = exciton_fraction(ks), 
-        coupling = coupling_track,
         suptitle=suptitle,
         g2_max=2,
         figname=os.path.join(writedir, "results.png")
@@ -329,18 +274,12 @@ if __name__ == "__main__":
     
     # save results as pkl
     d_results = {}
-    d_results['ks'] = ks
+    d_results['vgs'] = vgs
     d_results['g2s'] = g2s_track
     d_results['ns'] = ns_track
     d_results['Uk'] = U_track
     d_results['coupling_k'] = coupling_track
-    d_results['ex_frac'] = exciton_fraction(ks)
-    d_results['wk'] = omega_LP(ks)
-    d_results['vgk'] = vg_LP(ks)
-    # d_results['BDs'] = rho_in.get_BDs()
-    # d_results['PDs'] = rho_in.get_PDs()
-    # d_results['SvN'] = rho_in.entropy_profile(entropy='entanglement')
-    # d_results['SP'] = rho_in.entropy_profile(entropy='purity')
+
     d_results['parameters'] = {
         'num_channels': num_channels,
         'num_layers': num_layers,

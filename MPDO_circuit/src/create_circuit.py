@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from scipy.special import factorial
 from typing import List, Dict, Any
-from src.mpdo_circuit import MPDOCircuit, CircuitTopology
+from src.mpdo_circuit import MPDOCircuit, CouplerCircuit, PhaseCircuit, CircuitTopology
 from src.circuit_gates import NonlinearCouplingGate, NonlinearLocalGate, PhaseGate, HaarCouplingGate
 from src.utils import BosonOperatorsTorch, QubitOperatorTorch, sqrtm, eye_like
 
@@ -71,7 +71,7 @@ def create_nonlinear_photonic_circuit(
                         Nmax=Nmax, 
                         J=torch.tensor([J], requires_grad=requires_grad, device=device), 
                         U=torch.tensor([U], device=device), 
-                        Delta=torch.tensor([U], device=device), 
+                        Delta=torch.tensor([Delta], device=device), 
                         dt=dt[d], 
                         device=device
                     )
@@ -83,6 +83,7 @@ def create_nonlinear_photonic_circuit(
                         Nmax=Nmax, 
                         J=torch.tensor([J_init], requires_grad=True, device=device), 
                         U=torch.tensor([U], device=device), 
+                        Delta=torch.tensor([Delta], device=device), 
                         dt=dt[d], 
                         device=device
                     )
@@ -90,16 +91,16 @@ def create_nonlinear_photonic_circuit(
         # left side local gate
         if d % 2 == 1:
             circuit_topology[d][0] = NonlinearLocalGate(
-                Nmax=Nmax, U=torch.tensor([U], device=device), dt=dt[d], device=device
+                Nmax=Nmax, U=torch.tensor([U], device=device), Delta=torch.tensor([Delta], device=device), dt=dt[d], device=device
             )
 
         # right side local gate
         if ((d % 2) + right_stop) % 2 == 1:
             circuit_topology[d][right_stop-1] = NonlinearLocalGate(
-                Nmax=Nmax, U=torch.tensor([U], device=device), dt=dt[d], device=device
+                Nmax=Nmax, U=torch.tensor([U], device=device), Delta=torch.tensor([Delta], device=device), dt=dt[d], device=device
             )
 
-    return MPDOCircuit(
+    return CouplerCircuit(
         circuit_topology=CircuitTopology(circuit_topology),
         K_ops = K_ops,
     )
@@ -109,6 +110,7 @@ def create_nonlinear_bosonic_TEBD_step(
         num_channels: int, 
         J: List[List[float]|None]|float, 
         U: float,
+        Delta: float,
         Nmax: int,
         dt: float|List[float] = 1.,
         gamma: float = 0.,
@@ -120,7 +122,7 @@ def create_nonlinear_bosonic_TEBD_step(
     return create_nonlinear_photonic_circuit(
         num_layers=3,
         num_channels=num_channels,
-        J=J, U=U, gamma=gamma, Nmax=Nmax,
+        J=J, U=U, Delta=Delta, gamma=gamma, Nmax=Nmax,
         device=device, 
         dt=[dt/2., dt, dt/2.],
         dt_kraus=[None, None, dt],
@@ -158,7 +160,7 @@ def create_phase_circuit(
                 requires_grad
                 circuit_topology[d][l] = PhaseGate(
                     Nmax=Nmax, 
-                    phi=torch.tensor([phase], device=device,requires_grad=requires_grad),
+                    phi=torch.tensor([phase], device=device,requires_grad=requires_grad[d][l]),
                     dt=dt, 
                     device=device
                 )
@@ -168,12 +170,12 @@ def create_phase_circuit(
                 if phase_init is not None:
                     circuit_topology[d][l] = PhaseGate(
                         Nmax=Nmax, 
-                        phi=torch.tensor([phase_init], device=device, requires_grad=requires_grad[d][l]),
+                        phi=torch.tensor(phase_init, device=device, requires_grad=requires_grad[d][l]),
                         dt=dt, 
                         device=device
                     )
 
-    return MPDOCircuit(
+    return PhaseCircuit(
         circuit_topology=CircuitTopology(circuit_topology),
         K_ops = K_ops,
     )

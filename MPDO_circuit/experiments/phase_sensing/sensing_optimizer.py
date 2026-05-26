@@ -127,8 +127,8 @@ def iter_func(
         tracker.add('PFI', PFI)
         tracker.add('HFI', HFI)
         tracker.add('GFI', GFI)
-        tracker.add('J_init', circuit_init.get_coupling_matrix())
-        tracker.add('J_read', circuit_read.get_coupling_matrix())
+        tracker.add('J_init', circuit_init.get_J_matrix())
+        tracker.add('J_read', circuit_read.get_J_matrix())
         tracker.add('U', U_it)
 
         # visualization of Tracker
@@ -140,7 +140,7 @@ def iter_func(
         
         # visualization of circuit
         visualize_circuit(
-            circuit_init.get_coupling_matrix() + circuit_read.get_coupling_matrix(), 
+            circuit_init.get_J_matrix() + circuit_read.get_J_matrix(), 
             phase_shifts={'layer': circuit_init.num_layers, 'positions': phases},
             filename=os.path.join(SAVE_DIR, "circuit")
             )
@@ -292,8 +292,8 @@ if __name__ == "__main__":
 
 
     obj_params = (
-        [circuit_init.get_coupling_matrix(float_vals=False)]
-        + [circuit_read.get_coupling_matrix(float_vals=False)] 
+        [circuit_init.get_J_matrix(float_vals=False)]
+        + [circuit_read.get_J_matrix(float_vals=False)] 
         + [f_U]
     )
 

@@ -33,94 +33,12 @@ TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
 SAVE_DIR = os.path.join(FILE_DIR,"data", TIMESTAMP)
 
 
-Mc = lambda k: 1.6114 + 0.037 * k  # (photonic mode approximated as a straight line)
-Exca = 1.6229  # (exciton energy)
-OM = 3.4 * 1e-3 # (half the Rabi splitting)
-hbar_eV_ps = 6.582 * 1e-4 # hbar, converting energy to frequency
-hbar_ueV_ps = 6.582 * 1e2 # hbar, converting energy to frequency
-
-def omega_LP(k: float):
-
-    """
-    Lower-polariton dispersion in eV and um!
-
-    """
-
-    LP_disp =  0.5 * (Mc(k) + Exca) - 0.5 * ((Mc(k) - Exca)**2 + 4. * OM ** 2) ** 0.5
-    return LP_disp
-
-
-def vg_LP(k: float, dk: float=1e-3):
-    """
-    Lower-polariton group velocity, in eV * um / hbar = um / ps
-    """
-    return (omega_LP(k + dk/2.) - omega_LP(k - dk/2.)) / dk / hbar_eV_ps
-
-
-def exciton_fraction(k):
-    """ 
-    The exciton fraction at given k (um^(-1))
-    """
-    theta_k = np.arctan(OM / (omega_LP(k) - Mc(k)))
-    return np.cos(theta_k) ** 2
-
-def pulse_nonlinear_rate(vg: float, pulse_width: float, g: float):
-
-    """
-    Returns the pulse nonlinear rate in 1/ps from
-    vg: group velocity (um/ps)
-    pulse_width: ps
-    g: nonlinear interaction rate (1/ps)
-    """
-
-    # the spatial width in WG
-    spatial_width = pulse_width * vg
-
-    # compute inverse volume element from Gaussian distribution
-    x = np.linspace(-5 * spatial_width, 5 * spatial_width, 5001)
-    dx = x[1] - x[0]
-    profile = 1. / np.sqrt(2. * np.pi * spatial_width ** 2) \
-                * np.exp( -x ** 2 / 2. / spatial_width ** 2 )
-    inv_volume = np.sum(profile ** 2) * dx
-
-    # the effective nonlinear rate
-    U = g * inv_volume
-
-    return U
-
-
-def CLI_overwrite(hg, gamma, phi, writedir, device):
-
-    """
-    Overwrite the relevant parameters with CLI input
-    """
-
-    hg = get_CLI_input(
-        '--hg', type=float, default=hg
-        )
-
-    gamma = get_CLI_input(
-        '--gamma', type=float, default=gamma
-        )
-    
-    phi = get_CLI_input(
-        '--phi', type=float, default=phi
-        )
-    
-    writedir = get_CLI_input(
-        '--writedir', type=str, default=writedir
-        )
-    
-    device = get_CLI_input(
-        '--device', type=str, default=device
-        )
-    
-    return hg, gamma, phi, writedir, device
-
 def iter_func(
     rho: MPDOtorch, 
-    circuit: CouplerCircuit, 
-    circuit_phase: PhaseCircuit,
+    MZI_in: CouplerCircuit, 
+    MZI_out: CouplerCircuit, 
+    circuit_phase_in: PhaseCircuit,
+    circuit_phase_out: PhaseCircuit,
     options_MPDO: Dict[str, Any],
     tracker: Tracker, 
     it: int,
@@ -131,7 +49,7 @@ def iter_func(
     ):
 
     # update circuit
-    circuit.update(J_matrix=obj_params[0])
+    MZI.update(J_matrix=obj_params[0])
     circuit_phase.update(phase_matrix=obj_params[1])
 
     # run circuit
@@ -189,25 +107,19 @@ def iter_func(
 if __name__ == "__main__":
 
     device = "cuda:4"
-    k = 0.3 # um^-1
     
-    num_channels = 9
-    Nmax = 20
-    hg_ex = 10 # ueV * um^2: CLI overwritten
-    coupling_gauge = np.pi / 4 # the reference tunneling rate (for k[0], photonic regime)
-    layer_length = 200 # um
-    num_layers = 15
-    pulse_duration = 1 # ps
-    pulse_transverse = 0.5 # um
-    gamma_dt = 0.05 # loss rate (percentage): CLI overwritten
+    num_channels = 2
+    num_layers = 1
+    Nmax = 10
+    U_in, U_out = 0.01, 0.
+    J_in, J_out = np.pi / 4., np.pi / 4
+    phases_in, phases_out = [[0., 0.01]], [[0., np.pi/4]]
+    gamma_dt = 0.0 # loss rate (percentage): CLI overwritten
 
     # initial state
-    rel_phi = np.pi / 4 # relative phase shift pulses: CLI overwritten
+    rel_phi = np.pi / 4
     n0, nL = 1., 1. 
-    n_Fock = [1,1,1,1,1] # for testing with single photon input
-    is_coherent = True
     n_eps_g2 = 1e-10
-    g2_max = None
     target_intensity = 0.01
 
     # options
@@ -219,10 +131,6 @@ if __name__ == "__main__":
     # to store results
     writedir = os.path.join(FILE_DIR, "data", TIMESTAMP)
 
-    # overwrite by CLI
-    hg_ex, gamma_dt, rel_phi, writedir, device = CLI_overwrite(hg_ex, gamma_dt, rel_phi, writedir, device)
-
-
 
     # PREPARE INITIAL STATE
     dict_rhos = {}
@@ -231,12 +139,7 @@ if __name__ == "__main__":
 
     # initialize input state
     state_creator = StateCreator(Nmax, num_batch=1)
-
-    # initialise MPDO from tensors
-    if is_coherent:
-        list_ten = state_creator.product_state_coherent(alphas, device=device)
-    else:
-        list_ten = state_creator.product_state_fock(n_Fock, device=device)
+    list_ten = state_creator.product_state_coherent(alphas, device=device)
     rho = MPDOtorch(list_ten)
 
 
@@ -245,50 +148,54 @@ if __name__ == "__main__":
         os.makedirs(writedir)
 
     
-    # get k-dependent values
-    wk = omega_LP(k) # omega (eV)
-    vg = vg_LP(k) # group velocity um / ps
-    ex_frac = exciton_fraction(k) # exciton hopfield coeff |uk|^2, dimensionless
-    dt = layer_length / vg # the duration of one layer
-    U = pulse_nonlinear_rate(
-        vg=vg, 
-        pulse_width=pulse_duration, 
-        g=ex_frac ** 2 * (hg_ex/pulse_transverse/hbar_ueV_ps)) # the pulse nonlinear rate
-
-
     # circuit
     d = dict(
         num_layers = num_layers,
-        U = U, 
-        J =  coupling_gauge / dt,
-        gamma = gamma_dt / dt,
+        U = U_in, 
+        J =  J_in,
+        gamma = gamma_dt,
         order_kraus = 1,
-        dt = dt,
+        dt = 1.,
         Nmax = Nmax,
         num_channels = num_channels,
         requires_grad = True
     )
 
+    # create circuits
+    MZI_in = create_nonlinear_photonic_circuit(**d, device=device)
+    J_matrix_in =  MZI_in.get_J_matrix(float_vals=False)
+
+    d['J'] = J_out 
+    d['U'] = U_out
+    MZI_out = create_nonlinear_photonic_circuit(**d, device=device)
+    J_matrix_out =  MZI_out.get_J_matrix(float_vals=False)
 
     #######################################
     #       PREPARE
     #######################################
 
 
-    # create circuits
-    circuit = create_nonlinear_photonic_circuit(**d, device=device)
-    J_matrix =  circuit.get_J_matrix(float_vals=False)
-
-    # phase shifts
-    phases = [[rel_phi if i==num_channels-1 else 0. for i in range(num_channels)]]
     requires_grad = [[True for i in range(num_channels)]]
 
-    circuit_phase = create_phase_circuit(
+    circuit_phase_in = create_phase_circuit(
         Nmax=Nmax,
-        phase = phases,
+        phase = phases_in,
         device=device,
         requires_grad=requires_grad
     )
+
+    circuit_phase_out = create_phase_circuit(
+        Nmax=Nmax,
+        phase = phases_out,
+        device=device,
+        requires_grad=requires_grad
+    )
+
+    def run_circuit(rho):
+        circuit_phase_in.run(rho, options=options_MPDO)
+        MZI_in.run(rho, options=options_MPDO)
+        circuit_phase_out.run(rho, options=options_MPDO)
+        MZI_out.run(rho, options=options_MPDO)
 
 
     # run the init circuit
@@ -300,7 +207,7 @@ if __name__ == "__main__":
     weight_intensity = options_ADAM.pop('weight_intensity') 
     objective = lambda it, rho, obj_params, do_tracking: iter_func(
         rho, 
-        circuit, circuit_phase, options_MPDO=options_MPDO,
+        run_circuit, options_MPDO=options_MPDO,
         tracker=tracker, it=it,
         obj_params=obj_params,
         weight_intensity=weight_intensity,
@@ -314,7 +221,9 @@ if __name__ == "__main__":
     lr_min = options_ADAM.pop('lr_min')
     J_vars = [J for J_layer in J_matrix for J in J_layer if J is not None]
     optimizer = torch.optim.Adam(
-            circuit.get_variables() + circuit_phase.get_variables(), **options_ADAM
+            MZI_in.get_variables() + circuit_phase_in.get_variables() \
+                + MZI_out.get_variables() + phases_out.get_variables()
+            , **options_ADAM
         )
     if lr_min is not None:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs, eta_min=lr_min)
