@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from .utils import BosonOperatorsTorch, irescale, iregroup
 from .mpdo_torch import MPDOtorch
 from .svd_trunc import svd_trunc
-from .circuit_gates import CircuitGate, NonlinearCouplingGate, NonlinearLocalGate
+from .circuit_gates import CircuitGate, NonlinearCouplingGate, NonlinearLocalGate, PhaseGate
 
 
 class CircuitTopology:
@@ -140,7 +140,11 @@ class CouplerCircuit(MPDOCircuit):
         super().__init__(circuit_topology, K_ops)
 
 
-    def update(self, J_matrix: List[List[torch.Tensor|None]], U: torch.Tensor|None=None):
+    def update(
+            self, 
+            J_matrix: List[List[torch.Tensor|None]], 
+            phase_matrix: List[List[torch.Tensor|None]]=None, 
+            U: torch.Tensor|None=None):
 
         """Perform circuit update by updating all gate (after gradient update J-values)"""
 
@@ -148,7 +152,8 @@ class CouplerCircuit(MPDOCircuit):
             for l, gate in enumerate(gates_layer):
                 if isinstance(gate, NonlinearCouplingGate): 
                     gate.update(J_matrix[d][l], U)
-
+                if isinstance(gate, PhaseGate): 
+                    gate.update(phase_matrix[d][l])
                 if isinstance(gate, NonlinearLocalGate) and U is not None: 
                     gate.update(U)
 
@@ -172,6 +177,27 @@ class CouplerCircuit(MPDOCircuit):
                 ]
 
         return J_matrix
+    
+
+    def get_phase_matrix(self, float_vals: bool=True):
+        
+        phi_matrix = [
+            [
+                self.circuit_topology[d,l].phi # * self.circuit_topology[d,l].dt
+                if isinstance(self.circuit_topology[d,l], PhaseGate)
+                else None
+                for l in range(self.num_channels)
+            ]
+            for d in range(self.num_layers)
+        ]
+
+        if float_vals:
+            phi_matrix = [
+                [float(phi.detach().squeeze()) if phi is not None else None for phi in phi_layer] 
+                for phi_layer in phi_matrix
+                ]
+
+        return phi_matrix
     
 
     def get_coupling_matrix(self):

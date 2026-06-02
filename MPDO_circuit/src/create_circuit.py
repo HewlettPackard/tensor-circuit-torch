@@ -1,10 +1,154 @@
 import torch
 import numpy as np
+import warnings
 from scipy.special import factorial
 from typing import List, Dict, Any
 from src.mpdo_circuit import MPDOCircuit, CouplerCircuit, PhaseCircuit, CircuitTopology
 from src.circuit_gates import NonlinearCouplingGate, NonlinearLocalGate, PhaseGate, HaarCouplingGate
 from src.utils import BosonOperatorsTorch, QubitOperatorTorch, sqrtm, eye_like
+
+
+def create_nonlinear_mzi_circuit(
+        num_layers: int,
+        num_channels: int,
+        J: List[List[float | None]] | float,
+        U: float,
+        Nmax: int,
+        phase: List[List[float | None]] | float=0.,
+        Delta: float = 0.,
+        dt: float | List[float] = 1.,
+        gamma: float = 0.,
+        dt_kraus: List[float] | None = None,
+        order_kraus: int = 1,
+        requires_grad_J: bool = True,
+        requires_grad_phase: bool = False,
+        right_stop: int | None = None,
+        device: str = "cuda:0"
+) -> MPDOCircuit:
+    """
+    Create a nonlinear MZI-structured photonic circuit:
+        phase layer -> coupler layer -> phase layer -> coupler layer -> ... -> phase layer
+
+    For num_layers coupler layers, there are num_layers + 1 phase layers.
+    Coupler layers follow the same brick-like topology as create_nonlinear_photonic_circuit,
+    with nonlinearity U and detuning Delta passed through to each gate.
+
+    Parameters
+    ----------
+    num_layers : int
+        Number of coupler layers.
+    num_channels : int
+        Number of modes.
+    J : List[List[float | None]] | float
+        Coupling strengths. If float, same J everywhere (brick pattern).
+        If list of lists, shape [num_layers][num_channels], None skips that gate.
+    phase : List[List[float | None]] | float
+        Phase values. If float, same phase everywhere.
+        If list of lists, shape [num_layers + 1][num_channels], None skips that gate.
+    U : float
+        On-site nonlinear interaction strength (Kerr-type).
+    Nmax : int
+        Fock space truncation.
+    Delta : float
+        On-site detuning.
+    dt : float | List[float]
+        Timestep(s), one per coupler layer or a single shared value.
+    gamma : float
+        Amplitude damping rate. 0 means no dissipation.
+    dt_kraus : List[float] | None
+        Timesteps for Kraus operators; defaults to dt if None.
+    order_kraus : int
+        Order of amplitude damping Kraus expansion.
+    requires_grad_J : bool
+        Whether coupler parameters are differentiable.
+    requires_grad_phase : bool
+        Whether phase parameters are differentiable.
+    right_stop : int | None
+        Rightmost channel index (exclusive) for coupler gates. Defaults to num_channels.
+    device : str
+        Torch device string.
+
+    Returns
+    -------
+    MPDOCircuit
+        The MZI-structured nonlinear circuit.
+    """
+
+
+    if not isinstance(dt, list):
+        dt = [dt] * num_layers
+
+    right_stop = num_channels if right_stop is None else right_stop
+
+    # Kraus operators — one per coupler layer (None for pure layers)
+    if gamma > 1e-4:
+        dt_kraus = dt if dt_kraus is None else dt_kraus
+        K_ops_per_layer = [
+            None if dt_d is None else
+            amplitude_damping_kraus_ops(gamma * dt_d, Nmax=Nmax, order=order_kraus, device=device)
+            for dt_d in dt_kraus
+        ]
+    else:
+        K_ops_per_layer = [None] * num_layers
+
+    circuit_topology = [[None for _ in range(num_channels)] for _ in range(num_layers)]
+
+    U_t     = torch.tensor([U],     device=device)
+    Delta_t = torch.tensor([Delta], device=device)
+
+    for flat_d in range(num_layers):
+
+        # ---- PHASE LAYER ------------------------------------------------
+        if J[flat_d] == None:
+
+            for ch in range(num_channels):
+                phi = phase[flat_d][ch]
+                if phi is not None:
+                    circuit_topology[flat_d][ch] = PhaseGate(
+                        Nmax=Nmax,
+                        phi=torch.tensor([phi], dtype=torch.float64,
+                                         device=device, requires_grad=requires_grad_phase),
+                        dt=dt[flat_d],
+                        device=device
+                    )
+
+
+        # ---- COUPLER LAYER ----------------------------------------------
+        else:
+
+            for ch in range(right_stop - 1):
+                occupied_channels = []
+                j_val = J[flat_d][ch]
+                
+                if j_val is not None:
+                    circuit_topology[flat_d][ch] = NonlinearCouplingGate(
+                        Nmax=Nmax,
+                        J=torch.tensor([j_val], dtype=torch.float64,
+                                        device=device, requires_grad=requires_grad_J),
+                        U=U_t,
+                        Delta=Delta_t,
+                        dt=dt[flat_d],
+                        device=device
+                    )
+
+                    occupied_channels += [ch, ch + 1] # the connected channels, occupied by gate
+
+            # check for duplicates (doubly occupied sites, only 2-mode connectors allowed)
+            if len(set(occupied_channels)) != len(occupied_channels):
+                warnings.warn(f"J-list {flat_d} contains doubly occupied modes: {occupied_channels}")
+            
+            # ensure non-occupied modes receive local nonlinearity
+            for ch in range(num_channels):
+                if ch not in occupied_channels:
+                    circuit_topology[flat_d][ch] = NonlinearLocalGate(
+                        Nmax=Nmax, U=U_t, Delta=Delta_t, dt=dt[flat_d], device=device
+                    )
+
+    return CouplerCircuit(
+        circuit_topology=CircuitTopology(circuit_topology),
+        K_ops=K_ops_per_layer,
+    )
+
 
 def create_nonlinear_photonic_circuit(
         num_layers: int, 
