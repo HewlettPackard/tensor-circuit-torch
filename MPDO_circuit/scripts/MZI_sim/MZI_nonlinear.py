@@ -337,25 +337,12 @@ if __name__ == "__main__":
             g2_12s[iU, iT, iG, iP] = g2_12
 
     print(f"Finished in {time()-start_time:.2f}s\n")
-    # # ---- save ---------------------------------------------------------------
-    # outfile = "simulation_results.npz"
-    # np.savez_compressed(
-    #     outfile,
-    #     # axis coordinates
-    #     Us         = Us,
-    #     theta_outs = theta_outs,
-    #     gammas     = gammas,
-    #     phis       = phis,
-    #     # observables  — shape (nU, nTheta, nGamma, nPhi)
-    #     n1s        = n1s,
-    #     n2s        = n2s,
-    #     g2_11s     = g2_11s,
-    #     g2_22s     = g2_22s,
-    #     g2_12s     = g2_12s,
-    # )
-    # print(f"Results saved → {outfile}")
 
-    # ---- optional: also save as pickle (e.g. for quick dict-style access) ---
+    
+    # # ---- save ---------------------------------------------------------------
+
+
+    # Save as pickle (e.g. for quick dict-style access) ---
     results_dict = {
         "axes": {"Us": Us, "theta_outs": theta_outs, "gammas": gammas, "phis": phis},
         "n1s": n1s, "n2s": n2s,

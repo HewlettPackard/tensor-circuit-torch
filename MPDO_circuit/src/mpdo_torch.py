@@ -1,658 +1,1003 @@
-import torch
-import numpy as np
-import math
-from typing import List, Iterable, Dict, Any, Callable, TypeVar, Type
-from time import time
-import copy
+"""
+mpdo_torch.py
+-------------
+Matrix Product Density Operator (MPDO) simulation in PyTorch.
 
-from .utils import BosonOperatorsTorch, irescale, iregroup, sqrtm
+The MPDO is stored in a hybrid mixed-canonical form.  Each site tensor B[l]
+carries a batch (purity) dimension alongside the standard MPS bond and
+physical indices:
+
+    ρ = Σ_{batch} |Ψ_{batch}⟩⟨Ψ_{batch}|
+
+with each |Ψ_{batch}⟩ stored as a right-canonical MPS.  Left bond
+singular values SL[l] (l = 0 … N) and purity singular values SP[l]
+(l = 0 … N-1) are maintained explicitly.
+
+Tensor index convention for B[l]:  (batch, BD_L, d, BD_R)
+  - batch : purity / ensemble index
+  - BD_L  : left bond dimension
+  - d     : physical dimension  (= Nmax + 1)
+  - BD_R  : right bond dimension
+
+Classes
+-------
+MPDOtorch              : main MPDO class (state, observables, canonicalisation)
+StateCreator           : factory for standard bosonic input states
+concat_ensemble_from_list : stack a list of MPDOs along the batch dimension
+"""
+
+from time import time
+from typing import Dict, Iterable, List, TypeVar
+
+import numpy as np
+import torch
+
+from .utils import BosonOperatorsTorch, irescale, iregroup
 from .svd_trunc import svd_trunc
 
-# definition type for self-reference
+# Self-referential type alias used in clone() return type
 T = TypeVar("T", bound="MPDOtorch")
 
-class MPDOtorch:
 
+# ---------------------------------------------------------------------------
+# MPDOtorch
+# ---------------------------------------------------------------------------
+
+class MPDOtorch:
     """
-    A PyTorch implementation of the matrix-product state. Allows batch index for 
-    the tensors (first index) for the stochastic sampling.
+    Matrix Product Density Operator in mixed-canonical form.
 
     Parameters
     ----------
-    psis: List[torch.Tensor]
-        A list of the tensors for the MPS. bond dimension should be consistent (check still to be added)
-    
-    SL: List[torch.Tensor]|None (default None)
-        Left singular values, if known beforehand. Otherwise computed with canonicalization.
-
-    no_canonical_form: bool (default False)
-        skip canonicalization step upon initiation
+    psis              : list of N site tensors B[0] … B[N-1], each of shape
+                        (batch, BD_L, d, BD_R)
+    SL                : left bond singular-value vectors, length N+1;
+                        SL[0] = SL[N] = [1] by convention.
+                        Computed via canonicalisation when None.
+    SP                : purity singular-value vectors, length N.
+                        Computed via canonicalisation when None.
+    no_canonical_form : if True, skip canonicalisation on init.
+                        Use only when SL and SP are already known (e.g. after
+                        cloning).
     """
 
-    def __init__(self, psis: List[torch.Tensor], SL: List[torch.Tensor]|None=None, SP: List[torch.Tensor]|None=None, no_canonical_form: bool=False):
-
-        """
-        Initialize MPS state
-        """
-
-        # read input parameters
-        self.d = psis[1].shape[-2]
-        self.Nmax = self.d - 1
-        self._B = psis
+    def __init__(
+        self,
+        psis:              List[torch.Tensor],
+        SL:                "List[torch.Tensor] | None" = None,
+        SP:                "List[torch.Tensor] | None" = None,
+        no_canonical_form: bool                        = False,
+    ):
+        """Construct MPDO from site tensors; canonicalise unless SL/SP are supplied."""
+        self.d            = psis[1].shape[-2]   # physical dimension
+        self.Nmax         = self.d - 1
+        self._B           = psis
         self.num_channels = len(psis)
-        self.device = psis[0].device
-        self.dtype = psis[0].dtype
+        self.device       = psis[0].device
+        self.dtype        = psis[0].dtype
 
-
-        # see if left SVs are given
         if SL is None and SP is None:
-            self.SL = [None] * (self.num_channels + 1) # the entanglement entropy
-            self.SP = [None] * (self.num_channels) # the classical entropy
-            self.SL[0] = torch.tensor([1.], device=self.device)
+            self.SL     = [None] * (self.num_channels + 1)
+            self.SP     = [None] *  self.num_channels
+            self.SL[0]  = torch.tensor([1.], device=self.device)
             self.SL[-1] = torch.tensor([1.], device=self.device)
-            self.canonical_form() 
-
+            self.canonical_form()
         else:
             self.SL = SL
             self.SP = SP
 
-    
-    def canonical_form(self, options={'max_BD': 100, 'max_PD': 100, 'cutoff_BD': 1e-6, 'cutoff_PD': 1e-6}):
+    # ------------------------------------------------------------------
+    # Canonicalisation
+    # ------------------------------------------------------------------
+
+    def canonical_form(
+        self,
+        options: dict = {
+            'max_BD': 100, 'max_PD': 100,
+            'cutoff_BD': 1e-6, 'cutoff_PD': 1e-6,
+        },
+    ) -> None:
+        """
+        Bring the MPDO into mixed-canonical form.
+
+        Delegates to ``krauss_dissipation`` with an empty Kraus list, which
+        runs the full two-pass (L→R purity SVD then R→L bond SVD) sweep.
+
+        Parameters
+        ----------
+        options : truncation thresholds and maximum bond / purity dimensions:
+                    max_BD    — maximum bond dimension
+                    max_PD    — maximum purity dimension
+                    cutoff_BD — relative SV cutoff for bond truncation
+                    cutoff_PD — relative SV cutoff for purity truncation
+        """
         self.krauss_dissipation(K_ops=[], options=options)
 
-
     def krauss_dissipation(
-        self, 
-        K_ops: Iterable[torch.Tensor], 
-        options = {'max_BD': 100, 'max_PD': 100, 'cutoff_BD': 1e-6, 'cutoff_PD': 1e-6}
-        ):
-        
+        self,
+        K_ops:   Iterable[torch.Tensor],
+        options: dict = {
+            'max_BD': 100, 'max_PD': 100,
+            'cutoff_BD': 1e-6, 'cutoff_PD': 1e-6,
+        },
+    ) -> None:
+        """
+        Apply Kraus operators to every site and re-canonicalise.
 
-        # local variables
-        L = self.num_channels
+        When ``K_ops`` is empty the method acts as a pure canonicalisation
+        sweep without any dissipation.
 
-        # krauss ops
-        do_krauss = len(K_ops) > 0
+        Algorithm
+        ---------
+        Pass 1 — L→R (purity SVD):
+            For each site l, stack all Kraus operators into the batch dimension,
+            then truncate the purity index with a truncated SVD (keeping at most
+            ``max_PD`` components above ``cutoff_PD``), and QR-orthogonalise
+            the site tensor.  The right factor R is absorbed into site l+1.
 
-        # concat K ops
-        K_concat = torch.stack(K_ops, dim=0) if do_krauss else None
+        Pass 2 — R→L (bond SVD):
+            Starting from the right boundary, SVD-truncate the bond dimension
+            (keeping at most ``max_BD`` components above ``cutoff_BD``) to
+            place the MPDO in right-canonical form with normalised bond SVs
+            stored in ``self.SL``.
 
-        # B tensor left index  
-        B = self._B[0] if self.SL[0] is None else irescale(self._B[0], self.SL[0], ind=-3)
+        Parameters
+        ----------
+        K_ops   : list of (d×d) Kraus matrices.  Empty list → canonicalise only.
+        options : dict with keys max_BD, max_PD, cutoff_BD, cutoff_PD.
+        """
+        L        = self.num_channels
+        do_kraus = len(K_ops) > 0
+        K_concat = torch.stack(K_ops, dim=0) if do_kraus else None
 
-        # loop through chain  
+        # Pass 1: L→R — purity SVD
+        B = (self._B[0] if self.SL[0] is None
+             else irescale(self._B[0], self.SL[0], ind=-3))
+
         for il in range(L):
-
-            start = time()
-
-            # apply all dissipation channels, or return B (identity operator) if empty
-            # B_full = torch.concat([
-            #     torch.einsum("ij, bkjm -> bkim", K, B) for K in K_ops
-            # ], dim=0) if len(K_ops) > 0 else B
-            if do_krauss:
+            if do_kraus:
+                # Broadcast all Kraus operators over the batch dimension
                 B_full = torch.einsum("aij, bkjm -> abkim", K_concat, B)
                 B_full = B_full.reshape(K_concat.shape[0] * B.shape[0], *B_full.shape[2:])
             else:
                 B_full = B
 
-
-            # concat and SVD
-            U, s_purity, Vd, rescale = svd_trunc(
+            # Truncated SVD over the purity (batch) dimension
+            _, s_purity, Vd, _ = svd_trunc(
                 B_full.reshape(B_full.shape[0], -1),
-                cutoff = options["cutoff_PD"], 
-                max_num = options['max_PD'],
-                lowrank=True
+                cutoff=options['cutoff_PD'],
+                max_num=options['max_PD'],
+                lowrank=True,
             )
 
-            # B is new Vd tensor, rescaled with obtained SVs
-            B_krauss = irescale(Vd, factor=s_purity, ind=0).view(s_purity.shape + self._B[il].shape[1:])
+            # Purity-truncated site tensor, then QR for left-orthogonality
+            B_kraus = irescale(Vd, factor=s_purity, ind=0).view(
+                s_purity.shape + self._B[il].shape[1:]
+            )
+            Q, R = torch.linalg.qr(iregroup(B_kraus, [[0, 1, 2], [3]]), mode='reduced')
 
-            # QR across bond dimension
-            Q, R = torch.linalg.qr(iregroup(B_krauss, [[0,1,2], [3]]), mode='reduced')
-
-            # rescale Vd with SVs s and reshape to correct form
-            self._B[il] = Q.view(B_krauss.shape)
+            self._B[il] = Q.view(B_kraus.shape)
             self.SP[il] = s_purity
 
-            # B for next iteration
-            if il != L-1:
-                B = torch.einsum("ij, bjkl->bikl", R, self._B[il+1])
+            if il != L - 1:
+                B = torch.einsum("ij, bjkl->bikl", R, self._B[il + 1])
 
+        # Pass 2: R→L — bond SVD
+        B = (self._B[L - 1] if self.SL[L] is None
+             else irescale(self._B[L - 1], self.SL[L], ind=-1))
+        B = iregroup(B, [[1], [0], [2], [3]])
 
-        # backward R->L: SVDs, for convenience, set left bond index first
-        B = (
-            self._B[L-1] if self.SL[L] is None 
-            else irescale(self._B[L-1], self.SL[L], ind=-1)
-        )
-        B =  iregroup(B, [[1],[0],[2],[3]])
-
-        # loop from R to L through chain
         for il in range(L - 1, -1, -1):
+            U_bond, s, Vd, _ = svd_trunc(
+                iregroup(B, [[0], [1, 2, 3]]),
+                cutoff=options['cutoff_BD'],
+                max_num=options['max_BD'],
+                lowrank=True,
+            )
 
-            # SV decomposition and truncate, if requested
-            U, s, Vd, renormalize_factor = svd_trunc(
-                    iregroup(B, [[0], [1,2,3]]), 
-                    cutoff=options['cutoff_BD'], 
-                    max_num=options['max_BD'],
-                    lowrank=True
-                    ) # 
-
-            # update right site, make sure to swap indices
             self.SL[il] = s
             self._B[il] = iregroup(
-                Vd.view([-1, B.shape[1], B.shape[2], B.shape[3]]), 
-                [[1],[0],[2],[3]]
-                )
+                Vd.view([-1, B.shape[1], B.shape[2], B.shape[3]]),
+                [[1], [0], [2], [3]],
+            )
 
-            # for next iteration, always swap indices back (if not first one)
             if il != 0:
                 B = iregroup(
-                    torch.einsum("bijk,kl->bijl", self._B[il-1], irescale(U, s, ind=-1)),
-                    [[1],[0],[2],[3]]
+                    torch.einsum(
+                        "bijk,kl->bijl",
+                        self._B[il - 1],
+                        irescale(U_bond, s, ind=-1),
+                    ),
+                    [[1], [0], [2], [3]],
                 )
 
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
 
-    
-    def is_canonical(self, full: bool=False, tol: float=1e-6) -> bool|Dict[str,List[bool]]:
-
+    def is_canonical(
+        self,
+        full: bool  = False,
+        tol:  float = 1e-6,
+    ) -> "bool | Dict[str, List[bool]]":
         """
-        Check whether MPS in canonical form.
+        Check whether the MPDO is in (right-)canonical form.
+
+        Each site tensor B[l] should satisfy B B† = I (right-unitarity) and
+        each SV vector SL[l] should have unit norm.
 
         Parameters
         ----------
-        full: bool (default False)
-            Whether to return canonical form of each SV and tensor individually.
-        
-        tol: float (default 1e-6)
-            Numerical tolerance for determing right-unitarity and normalization
+        full : if True, return per-tensor and per-SV flags instead of a
+               single boolean.
+        tol  : numerical tolerance for unitarity and normalisation checks.
 
         Returns
         -------
-        bool or Dict[str,List[bool]]
-            Whether canonical (full=False) or Dict with canonicality of tensors and SVs (full=True)
-            
+        bool
+            True if all tensors are right-unitary and all SV vectors are
+            normalised (only when ``full=False``).
+        dict
+            ``{'B': List[bool], 'SVs': List[bool]}`` — per-site and
+            per-bond flags (only when ``full=True``).
         """
-
         B_canonical = []
-
         for B in self._B:
-
-            # compute B @ B^\dagger
-            BBd = torch.einsum(
-                "bijk, bljk->...il", B, B.conj()
-                )
-            
-            # check if it is identity matrix
+            BBd = torch.einsum("bijk, bljk->...il", B, B.conj())
             B_canonical.append(
-                ((torch.eye(BBd.shape[-1], device=BBd.device) - BBd) / B.numel()).norm(dim=[-2,-1]).mean() < tol
+                ((torch.eye(BBd.shape[-1], device=BBd.device) - BBd)
+                 / B.numel()).norm(dim=[-2, -1]).mean() < tol
             )
 
-
-        s_canonical = []
-        for s in self.SL:
-            s_canonical.append((s.norm(dim=-1).mean() - 1.) < tol)
+        s_canonical = [
+            (s.norm(dim=-1).mean() - 1.).abs() < tol for s in self.SL
+        ]
 
         if full:
-            return {
-                'B': B_canonical,
-                'SVs': s_canonical
-                }
-
+            return {'B': B_canonical, 'SVs': s_canonical}
         return all(s_canonical + B_canonical)
-    
-    
+
+    # ------------------------------------------------------------------
+    # Clone
+    # ------------------------------------------------------------------
+
     def clone(self: T) -> T:
         """
-        Clone MPS into other MPS (hard copy, all grads are detached)
+        Return an independent deep copy with all gradients detached.
+
+        All site tensors B[l] and singular-value vectors SL[l], SP[l] are
+        cloned; ``requires_grad`` flags are preserved.
+
+        Returns
+        -------
+        MPDOtorch
+            A new MPDO with freshly cloned tensors and no canonicalisation
+            step (SL and SP are already correct).
         """
         return MPDOtorch(
             [B.clone().detach().requires_grad_(B.requires_grad) for B in self._B],
             [S.clone().detach().requires_grad_(S.requires_grad) for S in self.SL],
             [S.clone().detach().requires_grad_(S.requires_grad) for S in self.SP],
-            no_canonical_form=True
+            no_canonical_form=True,
         )
-    
 
-    def ptrace(self, il: int):
+    # ------------------------------------------------------------------
+    # Local measurements
+    # ------------------------------------------------------------------
+
+    def ptrace(self, il: int) -> torch.Tensor:
         """
-        Get reduced single-site density matrix of site il.
-        """
+        Single-site reduced density matrix ρ_il = Tr_{≠il}[ρ].
 
-        return torch.einsum(
-            "bijk,bilk->jl", 
-                irescale( 
-                    self._B[il], self.SL[il] ** 2, ind=-3 # index rescaling with SVs (left tensor contraction)
-                    ), 
-            self._B[il].conj()
-            )
-    
-
-    # def trace_out(self, il: int, concat='left'):
-    #     """
-    #     Reduce density matrix of the MPDO by tracing out one site.
-    #     """
-
-    #     if il == 0:
-    #         concat = 'right'
-    #     if il == self.num_channels - 1:
-    #         concat = 'left'
-
-    #     Bi = self._B[il]
-
-    #     # trace tensor with itself, through physical and purity index -> transfer matrix
-    #     BBd = torch.einsum("bijk, bljm->iklm", Bi, Bi.conj())
-
-    #     # concat with left site
-    #     if concat == 'right':
-    #         BBd2 = torch.einsum("ijkl, bjmo, blpq->imokpq", BBd, self._B[il+1], self._B[il+1].conj())
-    #         U, s, Vd = svd_trunc(
-    #             iregroup(BBd2, [[0,1,2], [3,4,5]]),
-    #             cutoff = options["cutoff_PD"], 
-    #             max_num = options['max_PD'],
-    #             lowrank=True
-    #         )
-    
-
-    def diagonal_local_measurement(self, il: int, diagonal_els: torch.Tensor):
-        return torch.einsum(
-            "bijk,bijk", 
-            irescale( 
-                irescale( 
-                    self._B[il], self.SL[il] ** 2, ind=-3 # index rescaling with SVs (left tensor contraction)
-                    ), 
-                    diagonal_els, ind=-2 # index rescaling with n's (diagonal operator)
-                ), 
-            self._B[il].conj()
-            ).real
-
-    
-    def number_outcome(self, il: int) -> torch.Tensor:
-
-        """
-        Get single number outcome at mode/site index il
-
-        """
-        
-        # diagonal n elements
-        n_els = torch.arange(0, self.d, device=self.device)
-        return self.diagonal_local_measurement(il, n_els).real
-    
-
-    def number_variance(self, il: int) -> torch.Tensor:
-        n = self.number_outcome(il)
-
-        n2_els = torch.arange(0, self.d, device=self.device) ** 2
-        n2 = self.diagonal_local_measurement(il, n2_els)
-
-        return n2 - n ** 2
-    
-
-    def density_correlation(self, il: int, n_eps: float=1e-2) -> torch.Tensor:
-
-        # get number expectation
-        n = self.number_outcome(il)
-
-        # get second order correlator < n * (n-1)>
-        n_els = torch.arange(0, self.d, device=self.device)
-        n_nm1_els = n_els * (n_els - 1.)
-        C2 = self.diagonal_local_measurement(il, n_nm1_els)
-
-        # return g2
-        return (C2 + n_eps ** 2) / (n ** 2 + n_eps ** 2)
-
-
-    def number_outcomes(self) -> torch.Tensor:
-        return torch.stack([self.number_outcome(il) for il in range(self.num_channels)])
-    
-
-    def number_variances(self) -> torch.Tensor:
-        return torch.stack([self.number_variance(il) for il in range(self.num_channels)])
-    
-
-    def density_correlations(self, n_eps) -> torch.Tensor:
-        return torch.stack([self.density_correlation(il, n_eps=n_eps) for il in range(self.num_channels)])
-    
-
-    def local_expectation(
-            self, 
-            op: torch.Tensor, 
-            i: int|None=None, 
-            ) -> torch.Tensor:
-        """
-        Compute expectation value of local (single-mode) operator
+        Computed by contracting B[il] with its conjugate over all indices
+        except the physical ones, weighted by the squared bond SVs SL[il]².
 
         Parameters
         ----------
-        i : int
-            Mode for computatio
-        op : torch.Tensor
-            The operator for contraction (matrix of physical dimension)
+        il : site index (0-based).
 
         Returns
         -------
         torch.Tensor
-            The expectation value, array if ensemble_average not True
+            Complex (d×d) local density matrix at site ``il``.
         """
+        return torch.einsum(
+            "bijk,bilk->jl",
+            irescale(self._B[il], self.SL[il] ** 2, ind=-3),
+            self._B[il].conj(),
+        )
 
-        # if no site is given
+    def diagonal_local_measurement(
+        self,
+        il:           int,
+        diagonal_els: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Expectation value of a diagonal operator D = diag(diagonal_els).
+
+        Equivalent to Tr[ρ_il · D] but avoids constructing the full local
+        density matrix explicitly.
+
+        Parameters
+        ----------
+        il           : site index.
+        diagonal_els : 1-D tensor of length d containing the diagonal
+                       elements of the operator in the Fock basis.
+
+        Returns
+        -------
+        torch.Tensor
+            Real scalar expectation value ⟨D⟩_il.
+        """
+        return torch.einsum(
+            "bijk,bijk",
+            irescale(
+                irescale(self._B[il], self.SL[il] ** 2, ind=-3),
+                diagonal_els, ind=-2,
+            ),
+            self._B[il].conj(),
+        ).real
+
+    def number_outcome(self, il: int) -> torch.Tensor:
+        """
+        Mean photon number ⟨n̂⟩ at site ``il``.
+
+        Parameters
+        ----------
+        il : site index.
+
+        Returns
+        -------
+        torch.Tensor
+            Real scalar ⟨a†a⟩_il.
+        """
+        n_els = torch.arange(0, self.d, device=self.device, dtype=torch.float64)
+        return self.diagonal_local_measurement(il, n_els).real
+
+    def number_variance(self, il: int) -> torch.Tensor:
+        """
+        Photon-number variance Var(n̂) = ⟨n²⟩ - ⟨n⟩² at site ``il``.
+
+        Parameters
+        ----------
+        il : site index.
+
+        Returns
+        -------
+        torch.Tensor
+            Real scalar variance of the photon number at site ``il``.
+        """
+        n      = self.number_outcome(il)
+        n2_els = torch.arange(0, self.d, device=self.device, dtype=torch.float64) ** 2
+        n2     = self.diagonal_local_measurement(il, n2_els)
+        return n2 - n ** 2
+
+    def density_correlation(self, il: int, n_eps: float = 1e-2) -> torch.Tensor:
+        """
+        Second-order coherence g²(0) at site ``il``.
+
+        g²(0) = ⟨n(n-1)⟩ / ⟨n⟩²
+
+        Both numerator and denominator are regularised by ``n_eps²`` to
+        avoid division by zero in the vacuum.
+
+        Parameters
+        ----------
+        il    : site index.
+        n_eps : regularisation constant (default 1e-2).
+
+        Returns
+        -------
+        torch.Tensor
+            Real scalar g²(0) at site ``il``.
+        """
+        n     = self.number_outcome(il)
+        n_els = torch.arange(0, self.d, device=self.device, dtype=torch.float64)
+        C2    = self.diagonal_local_measurement(il, n_els * (n_els - 1.0))
+        return (C2 + n_eps ** 2) / (n ** 2 + n_eps ** 2)
+
+    def number_outcomes(self) -> torch.Tensor:
+        """
+        Mean photon numbers ⟨n̂_l⟩ stacked over all sites.
+
+        Returns
+        -------
+        torch.Tensor
+            1-D real tensor of length ``num_channels``.
+        """
+        return torch.stack([self.number_outcome(il) for il in range(self.num_channels)])
+
+    def number_variances(self) -> torch.Tensor:
+        """
+        Photon-number variances Var(n̂_l) stacked over all sites.
+
+        Returns
+        -------
+        torch.Tensor
+            1-D real tensor of length ``num_channels``.
+        """
+        return torch.stack([self.number_variance(il) for il in range(self.num_channels)])
+
+    def density_correlations(self, n_eps: float) -> torch.Tensor:
+        """
+        g²_l(0) stacked over all sites.
+
+        Parameters
+        ----------
+        n_eps : regularisation constant passed to ``density_correlation``.
+
+        Returns
+        -------
+        torch.Tensor
+            1-D real tensor of length ``num_channels``.
+        """
+        return torch.stack([
+            self.density_correlation(il, n_eps=n_eps)
+            for il in range(self.num_channels)
+        ])
+
+    def local_expectation(
+        self,
+        op: torch.Tensor,
+        i:  "int | None" = None,
+    ) -> torch.Tensor:
+        """
+        Expectation value ⟨op⟩ of a single-mode operator.
+
+        Parameters
+        ----------
+        op : (d×d) operator matrix in the Fock basis.
+        i  : site index.  If None, returns a stack over all sites via
+             ``local_expectations``.
+
+        Returns
+        -------
+        torch.Tensor
+            Complex scalar ⟨op⟩_i, or a 1-D tensor of length
+            ``num_channels`` when ``i`` is None.
+        """
         if i is None:
             return self.local_expectations(op)
 
-        # get SV rescaled B
         B_resc = irescale(self._B[i], self.SL[i], ind=-3)
-
-        # contract with operator
-        expect = torch.einsum(
-            "biqj, birj, qr", B_resc, B_resc.conj(), op.to(B_resc.device)
+        return torch.einsum(
+            "biqj, birj, qr",
+            B_resc, B_resc.conj(), op.to(B_resc.device),
         )
 
-        # If hermitian give real part
-        return expect
+    def local_expectations(self, op: torch.Tensor) -> torch.Tensor:
+        """
+        Expectation value ⟨op⟩_l stacked over all sites.
 
-    def local_expectations(self, op: torch.Tensor):
+        Parameters
+        ----------
+        op : (d×d) operator matrix.
+
+        Returns
+        -------
+        torch.Tensor
+            1-D complex tensor of length ``num_channels``.
+        """
         return torch.stack([self.local_expectation(op, il) for il in range(self.num_channels)])
 
+    # ------------------------------------------------------------------
+    # Two-site helpers
+    # ------------------------------------------------------------------
 
-    def __getitem__(self, i) -> torch.Tensor:
+    def get_C(self, j: int) -> torch.Tensor:
         """
-        psi[i] labels the B tensors of MPS description
-        """
-        return self._B[i]
-    
-    
-    def __setitem__(self, i, value):
-        """
-        Set a new B tensor on mode i
-        """
+        Contract B[j] and B[j+1] into a two-site tensor C.
 
-        self._B[i] = value
+        The result has shape (batch_L, BD_LL, d_L, d_R, BD_RR, batch_R)
+        and is used as the starting point for two-site gate application.
 
-    def to(self, device: str):
+        Parameters
+        ----------
+        j : left site index (gate spans sites j and j+1).
+
+        Returns
+        -------
+        torch.Tensor
+            Two-site tensor of shape (batch_L, BD_LL, d_L, d_R, BD_RR, batch_R).
         """
-        Transfer device (not efficient, always avoid if you can)
-        """
-
-        for B in self._B:
-            B.to(device)
-
-        for S in self.SL:
-            S.to(device)
-    
+        return torch.einsum("bijk, cklm -> bijlmc", self._B[j], self._B[j + 1])
 
     def get_theta(self, j: int) -> torch.Tensor:
+        """
+        Two-site tensor C[j] rescaled with the left bond SVs SL[j].
 
-        """ Contract C with its left SV """
+        This is the object on which a two-site gate is applied before SVD.
 
+        Parameters
+        ----------
+        j : left site index.
+
+        Returns
+        -------
+        torch.Tensor
+            Rescaled two-site tensor, same shape as ``get_C(j)``.
+        """
         return irescale(self.get_C(j), self.SL[j], ind=0)
 
-
-    def get_C(self, j) -> torch.Tensor:
-
-        """Contract B_j and B_{j+1} into new two-mode tensor C. """
-
-        return torch.einsum("bijk, cklm -> bijlmc", self._B[j], self._B[j+1] )
-    
-
-    def get_SL(self, i: int) -> torch.Tensor:
-        """Get the left singular values at mode i"""
-
-        return self.SL[i]
-
-
-    def set_SL(self, i: int, S):
-        """Set the left SVs at mode i"""
-        self.SL[i] = S
-
-
-    def get_BD(self, i: int) -> int:
-        """Get the (right) bond dimension at mode i"""
-        return self.SL[i+1].numel()
-    
-
-    def get_PD(self, i: int) -> int:
-        """Get the (right) probability dimension at mode i"""
-        return self._B[i].shape[0]
-    
-
-    def get_BDs(self) -> List[int]:
-        """Get all BDs"""
-        return [int(self.SL[i].shape[-1]) for i in range(self.num_channels + 1)]
-    
-
-    def get_PDs(self) -> List[int]:
-        """Get all probability dimensions"""
-        return [int(self._B[i].shape[0]) for i in range(self.num_channels )]
-    
+    # ------------------------------------------------------------------
+    # Global properties
+    # ------------------------------------------------------------------
 
     def norm(self) -> float:
-        """Overlap of state with itself -> norm of the state (should be 1 if canonical)"""
+        """
+        State norm ‖ρ‖² = Tr[ρ†ρ].
+
+        Should return 1 when the MPDO is in canonical form.
+
+        Returns
+        -------
+        float
+            Squared norm of the state.
+        """
         return self.overlap(self).abs() ** 2
-    
 
     def overlap(self, rho: T) -> torch.Tensor:
-
         """
-        Overlap between this quantum state and some other state psi.
-        This is per batch, batch 0 of one state is contracted with batch 0 from other and so on.
-        """
+        Overlap Tr[self† · rho] computed by right-to-left contraction.
 
-        # start right, contract with psi
+        Each batch index of ``self`` is contracted with the corresponding
+        batch index of ``rho``, so the result is a sum over all ensemble
+        members.
+
+        Parameters
+        ----------
+        rho : second MPDO (must have the same num_channels and physical dim).
+
+        Returns
+        -------
+        torch.Tensor
+            Complex scalar overlap.
+        """
         BBp = torch.einsum(
-            "bijk, bljk->il", self._B[self.num_channels - 1], rho[self.num_channels - 1].conj()
-            )
-
-        for i in range(self.num_channels-2, -1, -1):
-
-            B_self, B_other = self._B[i], rho[i]
-
+            "bijk, bljk->il",
+            self._B[self.num_channels - 1],
+            rho[self.num_channels - 1].conj(),
+        )
+        for i in range(self.num_channels - 2, -1, -1):
             BBp = torch.einsum(
-                    "lm, birl, bkrm->ik", BBp, B_self, B_other.conj()
-                )
-            
-        overlap = torch.einsum(
-                "...ii", BBp
-                )
-        
-        return overlap
+                "lm, birl, bkrm->ik", BBp, self._B[i], rho[i].conj()
+            )
+        return torch.einsum("...ii", BBp)
 
-
-    def entropy_profile(self, alpha: int=1, entropy='entanglement'):
-
+    def entropy_profile(
+        self,
+        alpha:   int = 1,
+        entropy: str = 'entanglement',
+    ) -> torch.Tensor:
         """
-            Compute entanglement profile of MPS. Make sure it is in canonical form. 
-            alpha sets Renyi order of entanglement (p=0: bond dimension, p=1: Von Neumann entropy).
-        """
+        Rényi entropy profile along the chain.
 
+        For ``alpha=1`` (default) returns the von Neumann entropy
+        S = -Σ p log p, where p = s² are the squared singular values.
+        For ``alpha>1`` returns the order-α Rényi entropy
+        S_α = 1/(1-α) log(Σ p^α).
+
+        Parameters
+        ----------
+        alpha   : Rényi order.  1 = von Neumann (default).
+        entropy : which SV spectrum to use:
+                    'entanglement' — bond SVs SL (length N+1).
+                    'purity'       — purity SVs SP (length N).
+
+        Returns
+        -------
+        torch.Tensor
+            1-D tensor of entropy values; length N+1 for entanglement
+            entropy, length N for purity entropy.
+        """
+        SVDs      = self.SL if entropy == 'entanglement' else self.SP
         S_profile = []
-        SVDs = self.SL if entropy == 'entanglement' else self.SP
         for s in SVDs:
-
             prob = s ** 2
-            
-            # von neumann (default)
             if alpha == 1:
-                # add epsilon for zero s-values, first sum over bond dimension (SVs), then take mean over batch dimension
-                S_profile.append(
-                    -(prob * torch.log(prob + 1e-15)).sum(axis=-1).mean() 
-                    )
-            
-            # higher renyi order
+                S_profile.append(-(prob * torch.log(prob + 1e-15)).sum(axis=-1).mean())
             else:
                 S_profile.append(
-                    1. / (1. - alpha) * torch.log((prob ** alpha).sum(axis=-1).mean())
-                    )
-
+                    1.0 / (1.0 - alpha)
+                    * torch.log((prob ** alpha).sum(axis=-1).mean())
+                )
         return torch.stack(S_profile)
 
-        
+    # ------------------------------------------------------------------
+    # Bond / purity dimension accessors
+    # ------------------------------------------------------------------
+
+    def get_SL(self, i: int) -> torch.Tensor:
+        """
+        Left bond singular values at bond i (between sites i-1 and i).
+
+        Parameters
+        ----------
+        i : bond index (0 … num_channels).
+
+        Returns
+        -------
+        torch.Tensor
+            1-D SV vector at bond i.
+        """
+        return self.SL[i]
+
+    def set_SL(self, i: int, S: torch.Tensor) -> None:
+        """
+        Overwrite the left bond singular values at bond i.
+
+        Parameters
+        ----------
+        i : bond index.
+        S : new SV vector.
+        """
+        self.SL[i] = S
+
+    def get_BD(self, i: int) -> int:
+        """
+        Right bond dimension at site i  (= number of SVs at bond i+1).
+
+        Parameters
+        ----------
+        i : site index.
+
+        Returns
+        -------
+        int
+            Bond dimension between sites i and i+1.
+        """
+        return self.SL[i + 1].numel()
+
+    def get_PD(self, i: int) -> int:
+        """
+        Purity dimension (batch size) at site i.
+
+        Parameters
+        ----------
+        i : site index.
+
+        Returns
+        -------
+        int
+            Number of ensemble members (batch dimension) at site i.
+        """
+        return self._B[i].shape[0]
+
+    def get_BDs(self) -> List[int]:
+        """
+        All bond dimensions, one per bond (length num_channels + 1).
+
+        Returns
+        -------
+        List[int]
+            Bond dimension at each bond, including the two trivial
+            boundary bonds (always 1 in canonical form).
+        """
+        return [int(self.SL[i].shape[-1]) for i in range(self.num_channels + 1)]
+
+    def get_PDs(self) -> List[int]:
+        """
+        All purity dimensions, one per site (length num_channels).
+
+        Returns
+        -------
+        List[int]
+            Batch (purity) dimension at each site.
+        """
+        return [int(self._B[i].shape[0]) for i in range(self.num_channels)]
+
+    # ------------------------------------------------------------------
+    # Indexing
+    # ------------------------------------------------------------------
+
+    def __getitem__(self, i: int) -> torch.Tensor:
+        """
+        Access site tensor B[i].
+
+        Parameters
+        ----------
+        i : site index.
+
+        Returns
+        -------
+        torch.Tensor
+            Site tensor of shape (batch, BD_L, d, BD_R).
+        """
+        return self._B[i]
+
+    def __setitem__(self, i: int, value: torch.Tensor) -> None:
+        """
+        Replace site tensor B[i].
+
+        Parameters
+        ----------
+        i     : site index.
+        value : new site tensor; must have compatible shape.
+        """
+        self._B[i] = value
+
+    # ------------------------------------------------------------------
+    # Device transfer
+    # ------------------------------------------------------------------
+
+    def to(self, device: str) -> None:
+        """
+        Move all tensors to ``device``.
+
+        This is an in-place operation.  Prefer constructing states directly
+        on the target device when possible; cross-device transfers are slow.
+
+        Parameters
+        ----------
+        device : target Torch device string, e.g. 'cuda:0' or 'cpu'.
+        """
+        for B in self._B:
+            B.to(device)
+        for S in self.SL:
+            S.to(device)
 
 
+# ---------------------------------------------------------------------------
+# StateCreator
+# ---------------------------------------------------------------------------
 
 class StateCreator:
-
     """
-    Class for state generation, including a number of bosonic states, such as
-    Fock states, coherent states, cat or Bell states
+    Factory for standard bosonic input states as MPS site-tensor lists.
+
+    All returned tensors are compatible with ``MPDOtorch``.
 
     Parameters
     ----------
-
-    Nmax: int
-        The maximal number of photons. Physical dimension is d = Nmax + 1 (with vacuum)
-    num_batch: int|None (default None)
-        number of batch states, setting the batch dimension for MC sampling
-
+    Nmax      : Fock-space truncation; physical dimension d = Nmax + 1.
+    num_batch : batch (purity) dimension size.  None → no batch axis added.
     """
 
-    def __init__(self, Nmax: int, num_batch: int|None=None):
-
-        """Initialize state generator"""
-
-        # copy parameters
-        self.Nmax = Nmax
-        self.d = Nmax + 1 # the array dimension (+ vacuum)
+    def __init__(self, Nmax: int, num_batch: "int | None" = None):
+        """Set up Fock-space operators and state-generation lambdas."""
+        self.Nmax      = Nmax
+        self.d         = Nmax + 1
         self.num_batch = num_batch
+        self.ops       = BosonOperatorsTorch(Nmax)
 
-        # boson operators
-        self.ops = BosonOperatorsTorch(Nmax)
+        # Vacuum state |0⟩ — used as reference for displacement / squeezing
+        self.vac    = torch.zeros(Nmax + 1, dtype=torch.complex128)
+        self.vac[0] = 1.
 
-        # the vacuum state
-        self.vac = torch.zeros(Nmax + 1, dtype=torch.complex128)
-        self.vac[0] = 1
-
-        # define operators for displacement, squeezing and thermal state
-        self.D = lambda alpha: torch.matrix_exp(alpha * self.ops.ad - np.conj(alpha) * self.ops.a if isinstance(alpha, float)
-                                else alpha * self.ops.ad - alpha.conj() * self.ops.a)
-        self.S = lambda xi: torch.matrix_exp(
-            0.5 * (np.conj(xi) * self.ops.a @ self.ops.a + xi * self.ops.ad @ self.ops.ad)
-            )
-        self.rho_th = lambda n_th: torch.diag(
-            1. / (n_th + 1.) * (n_th / (n_th + 1.)) ** np.arange(Nmax + 1)
-        ) if n_th > 1e-8 else self.vac.T @ self.vac
-
-
-    def fock(self, n: int, to: str|None=None, direct=False) -> torch.Tensor:
-
-        """Generate single-mode Fock state |n>"""
-
-        state = torch.tensor([1 if i==n else 0 for i in range(self.d)], dtype=torch.complex128, device=to)
-        if direct:
-            return state
-        
-        # else make right MPS form
-        state = torch.unsqueeze(
-            torch.unsqueeze(state, 0), 
-            -1)
-        
-        if self.num_batch is not None:
-            state = state.repeat(self.num_batch, *[1] * len(state.shape))
-        
-        return state if to is None else state.to(to)
-    
-
-    def product_state_fock(
-            self, nums: Iterable[int], device: str|None=None, direct=False
-            ) -> List[torch.Tensor]:
-
-        """Generate product Fock state. Numers are given as integer input."""
-        return [self.fock(n, to=device, direct=direct) for n in nums]
-    
-
-    def single_mode_coherent(self, alpha: torch.Tensor|complex, to: str|None=None) -> torch.Tensor:
-
-        """Generate single-mode coherent state |alpha>"""
-
-        Cn = self.D(alpha) @ self.vac
-        
-        state = torch.unsqueeze(torch.unsqueeze(Cn, 0), -1)
-        
-        if self.num_batch is not None:
-            state = state.repeat(self.num_batch, *[1] * len(state.shape))
-
-        return state if to is None else state.to(to)
-
-    
-    def product_state_coherent(
-            self, alphas: Iterable, device: str|None=None
-    ) -> List[torch.Tensor]:
-        
-        """Generate product state of coherent states"""
-        
-        return [self.single_mode_coherent(alpha, to=device) for alpha in alphas]
-    
-    
-
-    def single_mode_cat(
-            self, 
-            alpha: torch.Tensor|complex, 
-            to: str|None=None, 
-            phase: float|str=0., 
-            direct: bool=True
-            ) -> torch.Tensor:
-        
-        """
-        Generate single-mode cat state N |alpha> + e^{i*phi}|-alpha>. 
-        "direct" indicates wether to leave out L and R default bond indices
-        """
-        
-        # check if even or odd state required, give right phase
-        if isinstance(phase, str):
-            phase = 0. if phase == 'even' else np.pi
-        
-        # construct coefficients and normalize
-        Cn = (self.D(alpha) @ self.vac + np.exp(1j*phase) * self.D(-alpha) @ self.vac).to(to)
-        Cn = Cn / Cn.norm()
-
-        # if no batch indices are added
-        if direct:
-            return Cn
-        
-        state = torch.unsqueeze(torch.unsqueeze(Cn, 0), -1)
-        
-        if self.num_batch is not None:
-            state = state.repeat(self.num_batch, *[1] * len(state.shape))
-
-        return state if to is None else state.to(to)
-
-    
-    def two_mode_NOON(self, n: int=1, phase: float|str='even', to: str|None=None, direct=True) -> torch.Tensor:
-
-        """Two-mode N00N state"""
-        
-        # check if even or odd state required, give right phase
-        if isinstance(phase, str):
-            phase = 0. if phase == 'even' else np.pi
-
-        Cn = torch.outer(*self.product_state_fock([n,0], direct=True)) + np.exp(1j * phase) * torch.outer(*self.product_state_fock([0,n], direct=True))
-        Cn = Cn / Cn.norm()
-        Cn = Cn.to(to)
-
-        # if no batch indices are added
-        if direct:
-            return Cn
-        
-        state = torch.unsqueeze(torch.unsqueeze(Cn, 0), -1)
-        
-        if self.num_batch is not None:
-            state = state.repeat(self.num_batch, *[1] * len(state.shape))
-
-        return state if to is None else state.to(to)
-    
-
-def concat_ensemble_from_list(list_psi: List[List[torch.Tensor]]) -> List[torch.Tensor]:
-    """
-        List of MPS into one ensemble MPS by extending tensors with one batch index. 
-        all tensor expected to be of same shape (can be generalized later if needed)
-    """
-
-    num_channels = len(list_psi[0])
-    num_states = len(list_psi)
-
-    ensemble_psi = []
-    for ind in range(num_channels):
-        ensemble_psi.append(
-            torch.cat([list_psi[i_state][ind] for i_state in range(num_states)], dim=0)
+        # Displacement operator D(α) = exp(α a† - α* a)
+        self.D = lambda alpha: torch.matrix_exp(
+            alpha * self.ops.ad - np.conj(alpha) * self.ops.a
+            if isinstance(alpha, float)
+            else alpha * self.ops.ad - alpha.conj() * self.ops.a
         )
 
-    return ensemble_psi
+        # Squeezing operator S(ξ) = exp(½(ξ* a² + ξ a†²))
+        self.S = lambda xi: torch.matrix_exp(
+            0.5 * (np.conj(xi) * self.ops.a @ self.ops.a
+                   + xi * self.ops.ad @ self.ops.ad)
+        )
 
+        # Thermal state ρ_th(n_th) — diagonal in the Fock basis
+        self.rho_th = lambda n_th: (
+            torch.diag(
+                1.0 / (n_th + 1.) * (n_th / (n_th + 1.)) ** np.arange(Nmax + 1)
+            )
+            if n_th > 1e-8
+            else self.vac.T @ self.vac
+        )
+
+    # ------------------------------------------------------------------
+    # Single-mode states
+    # ------------------------------------------------------------------
+
+    def fock(self, n: int, to: "str | None" = None, direct: bool = False) -> torch.Tensor:
+        """
+        Single-mode Fock state |n⟩.
+
+        Parameters
+        ----------
+        n      : photon number (0 ≤ n ≤ Nmax).
+        to     : Torch device string; None → keep on default device.
+        direct : if True, return the bare 1-D coefficient vector without
+                 bond or batch indices (useful for outer products).
+
+        Returns
+        -------
+        torch.Tensor
+            If ``direct=True``: 1-D complex vector of length d.
+            Otherwise: tensor of shape (num_batch, 1, d, 1) (with batch
+            axis) or (1, d, 1) (without).
+        """
+        state = torch.tensor(
+            [1 if i == n else 0 for i in range(self.d)],
+            dtype=torch.complex128, device=to,
+        )
+        if direct:
+            return state
+
+        state = torch.unsqueeze(torch.unsqueeze(state, 0), -1)
+        if self.num_batch is not None:
+            state = state.repeat(self.num_batch, *([1] * len(state.shape)))
+
+        return state if to is None else state.to(to)
+
+    def single_mode_coherent(
+        self,
+        alpha: "torch.Tensor | complex",
+        to:    "str | None" = None,
+    ) -> torch.Tensor:
+        """
+        Single-mode coherent state |α⟩ = D(α)|0⟩.
+
+        Parameters
+        ----------
+        alpha : complex displacement amplitude.
+        to    : target device.
+
+        Returns
+        -------
+        torch.Tensor
+            Site tensor of shape (num_batch, 1, d, 1) or (1, d, 1).
+        """
+        Cn    = self.D(alpha) @ self.vac
+        state = torch.unsqueeze(torch.unsqueeze(Cn, 0), -1)
+
+        if self.num_batch is not None:
+            state = state.repeat(self.num_batch, *([1] * len(state.shape)))
+
+        return state if to is None else state.to(to)
+
+    def single_mode_cat(
+        self,
+        alpha:  "torch.Tensor | complex",
+        device:     "str | None"  = None,
+        phase:  "float | str" = 0.,
+        direct: bool          = True,
+    ) -> torch.Tensor:
+        """
+        Normalised single-mode cat state: N (|α⟩ + e^{iφ} |-α⟩).
+
+        Parameters
+        ----------
+        alpha  : coherent amplitude.
+        to     : target device.
+        phase  : relative phase φ (rad), or the strings 'even' (φ=0) /
+                 'odd' (φ=π).
+        direct : if True, return the bare 1-D coefficient vector.
+
+        Returns
+        -------
+        torch.Tensor
+            Normalised state vector or site tensor depending on ``direct``.
+        """
+        if isinstance(phase, str):
+            phase = 0. if phase == 'even' else np.pi
+
+        Cn = (self.D(alpha) @ self.vac
+              + np.exp(1j * phase) * self.D(-alpha) @ self.vac).to(device)
+        Cn = Cn / Cn.norm()
+
+        if direct:
+            return Cn
+
+        state = torch.unsqueeze(torch.unsqueeze(Cn, 0), -1)
+        if self.num_batch is not None:
+            state = state.repeat(self.num_batch, *([1] * len(state.shape)))
+
+        return state if to is None else state.to(to)
+
+    def two_mode_NOON(
+        self,
+        n:      int           = 1,
+        phase:  "float | str" = 'even',
+        to:     "str | None"  = None,
+        direct: bool          = True,
+    ) -> torch.Tensor:
+        """
+        Normalised two-mode N00N state: N (|N,0⟩ + e^{iφ} |0,N⟩).
+
+        Parameters
+        ----------
+        n      : photon number N.
+        phase  : relative phase φ (rad), or 'even' / 'odd'.
+        to     : target device.
+        direct : if True, return the bare 2-D coefficient matrix
+                 (shape d×d, useful for embedding into an MPS).
+
+        Returns
+        -------
+        torch.Tensor
+            Normalised coefficient matrix (direct=True) or site tensor.
+        """
+        if isinstance(phase, str):
+            phase = 0. if phase == 'even' else np.pi
+
+        Cn = (torch.outer(*self.product_state_fock([n, 0], direct=True))
+              + np.exp(1j * phase) * torch.outer(*self.product_state_fock([0, n], direct=True)))
+        Cn = (Cn / Cn.norm()).to(to)
+
+        if direct:
+            return Cn
+
+        state = torch.unsqueeze(torch.unsqueeze(Cn, 0), -1)
+        if self.num_batch is not None:
+            state = state.repeat(self.num_batch, *([1] * len(state.shape)))
+
+        return state if to is None else state.to(to)
+
+    # ------------------------------------------------------------------
+    # Product states
+    # ------------------------------------------------------------------
+
+    def product_state_fock(
+        self,
+        nums:   Iterable[int],
+        device: "str | None" = None,
+        direct: bool         = False,
+    ) -> List[torch.Tensor]:
+        """
+        Product Fock state |n_0⟩ ⊗ |n_1⟩ ⊗ … as a list of site tensors.
+
+        Parameters
+        ----------
+        nums   : iterable of photon numbers, one per channel.
+        device : target device.
+        direct : passed through to ``fock``; if True each tensor is a bare
+                 1-D vector.
+
+        Returns
+        -------
+        List[torch.Tensor]
+            One site tensor per channel.
+        """
+        return [self.fock(n, to=device, direct=direct) for n in nums]
+
+    def product_state_coherent(
+        self,
+        alphas: Iterable,
+        device: "str | None" = None,
+    ) -> List[torch.Tensor]:
+        """
+        Product coherent state |α_0⟩ ⊗ |α_1⟩ ⊗ … as a list of site tensors.
+
+        Parameters
+        ----------
+        alphas : iterable of complex amplitudes, one per channel.
+        device : target device.
+
+        Returns
+        -------
+        List[torch.Tensor]
+            One site tensor per channel.
+        """
+        return [self.single_mode_coherent(alpha, to=device) for alpha in alphas]
+
+
+# ---------------------------------------------------------------------------
+# Module-level utility
+# ---------------------------------------------------------------------------
+
+def concat_ensemble_from_list(
+    list_psi: List[List[torch.Tensor]],
+) -> List[torch.Tensor]:
+    """
+    Stack a list of MPDOs into a single MPDO with an enlarged batch dimension.
+
+    All input states must have identical tensor shapes.
+
+    Parameters
+    ----------
+    list_psi : list of MPDOs; each MPDO is itself a list of N site tensors.
+
+    Returns
+    -------
+    List[torch.Tensor]
+        N site tensors, each with a batch dimension equal to the total
+        number of input states.
+    """
+    num_channels = len(list_psi[0])
+    num_states   = len(list_psi)
+    return [
+        torch.cat([list_psi[i_state][ind] for i_state in range(num_states)], dim=0)
+        for ind in range(num_channels)
+    ]
