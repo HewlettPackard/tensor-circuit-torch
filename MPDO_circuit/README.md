@@ -9,13 +9,15 @@ This repository contains the source code accompanying the paper:
 
 The framework maps pulsed nonlinear waveguide dynamics onto a bosonic quantum circuit representation and simulates the output photon statistics using Matrix Product Density Operators (MPDOs) in PyTorch, with full support for dissipation, gradient-based optimisation and GPU acceleration.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
 ---
 
 ## Overview
 
 Exciton-polaritons in (Al)GaAs waveguides combine strong optical nonlinearities with a guided-mode geometry, making them a leading platform for integrated quantum photonics.  This codebase provides:
 
-- A **differentiable MPDO simulator** for bosonic circuits with Fock-space truncation, Kerr nonlinearities, and amplitude-damping dissipation.
+- A **differentiable MPDO simulator** for bosonic circuits with Fock-space truncation, Kerr nonlinearities, and Kraus amplitude-damping dissipation.
 - **Polariton dispersion utilities** (LP energy, group velocity, band curvature, exciton fraction) for (Al)GaAs waveguide parameters.
 - **Circuit factories** for nonlinear photonic circuits, MZI topologies, TEBD steps, phase circuits and Haar-random benchmarks.
 - **Experiment scripts** reproducing the two main results of the paper: scanning g²(0) as a function of wavevector *k* (multi-channel circuit) and as a function of group velocity *v_g* (no exciton-fraction rescaling).
@@ -44,17 +46,10 @@ tensor-circuit-torch/
 │       ├── g2_experiment/
 │       │   ├── g2_simulator.py            # Scan g²(0) vs wavevector k  [Fig. paper]
 │       │   └── g2_simulator_scan_vg.py    # Scan g²(0) vs group velocity v_g  [Fig. paper]
-│       ├── phase_sensing/
-│       │   ├── sensing_utils.py           # Fisher information metrics (QFI, GFI, HFI, NFI)
-│       │   ├── sensing_optimizer.py       # Two-stage QFI → CFI optimisation
-│       │   ├── sensing_optimizer_alternate.py  # Alternating QFI/CFI optimisation
-│       │   └── ghost_imaging_optimizer.py # Ghost-imaging sensing optimisation
-│       ├── photon_pulse/
-│       │   └── pulse_MPDO.py              # Time-domain TEBD pulse propagation
-│       ├── random_qubit/
-│       │   └── main.py                    # Haar-random circuit benchmark
-│       └── single_coupler_SPG/
-│           └── nonlinear_MZI.py           # Single MZI g² optimisation
+|       |   └── analyze.ipynb              # analyze the scan run for k (figure from paper)
+|       |   └── analyze_vg.ipynb           # analyze the scan run for v_g (figure from paper)
+│   └── bash_scripts/
+|       |   └── loop_g2_circuit.sh         # shell script for scanning the circuit parameters 
 ```
 
 ---
@@ -66,7 +61,9 @@ tensor-circuit-torch/
 ```bash
 git clone https://github.com/HewlettPackard/tensor-circuit-torch.git
 cd tensor-circuit-torch
-pip install -e .
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
 GPU acceleration is strongly recommended for circuits with more than ~6 channels or Nmax > 15.  The scripts default to `cuda:0`; pass `--device cpu` to run on CPU.
@@ -76,6 +73,18 @@ GPU acceleration is strongly recommended for circuits with more than ~6 channels
 ## Paper experiments
 
 The two main simulation results from the paper are reproduced by the scripts below.  Both scan the second-order coherence g²(0) and photon number across a physical parameter range for a fixed multimode nonlinear photonic circuit.
+
+For reproducing Fig. 3 and Appendices Fig. 7-8:
+
+    - Run `python -m scripts.MZI_sim.MZI_nonlinear`
+
+    - Analyze with the provided notebook
+
+For reproducing Figs. 5 and 6:
+
+    - run the shell script (uncomment the right parameters for the nested loop)
+    
+    - run the 'analyze.ipynb' notebooks in experiments/ folder
 
 ### 1 — g²(0) vs wavevector *k*  (polariton dispersion scan)
 
@@ -168,7 +177,3 @@ If this code contributes to your research, please cite:
 ```
 
 ---
-
-## License
-
-This project is licensed under the Apache 2.0 License — see [`LICENSE`](LICENSE) for details.
