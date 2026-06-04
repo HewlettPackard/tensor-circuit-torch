@@ -1,7 +1,7 @@
 """
 svd_trunc.py
 ------------
-Differentiable truncated SVD for complex matrices, implemented as a custom
+The core of MPDOtorch gate contractions: a differentiable truncated SVD for complex matrices, implemented as a custom
 ``torch.autograd.Function``.
 
 The key challenge is that PyTorch's built-in SVD gradient is unstable for

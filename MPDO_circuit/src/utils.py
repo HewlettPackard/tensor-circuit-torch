@@ -166,7 +166,8 @@ def h(x: torch.Tensor, ind1: int = -2, ind2: int = -1) -> torch.Tensor:
 
 def mat_pow(mat: torch.Tensor, pow: float = 0.5) -> torch.Tensor:
     """
-    Matrix power via eigendecomposition: M^pow = U diag(λ^pow) U†.
+    Matrix power via eigendecomposition: M^pow = U diag(λ^pow) U†. 
+    Only for Hermitian matrices A = A^\dagger
 
     Default `pow=0.5` computes the matrix square root.
     """

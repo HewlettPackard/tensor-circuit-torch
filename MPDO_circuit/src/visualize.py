@@ -13,8 +13,6 @@ import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.patches as patches
 
-from src.mpdo_torch import MPDOtorch
-
 
 def visualize_circuit(
     profile:      Iterable[Iterable["float | None"]],
@@ -132,7 +130,7 @@ def visualize_circuit(
 
 
 def visualize_number_distribution(
-    ns:      MPDOtorch,
+    ns:      np.ndarray,
     figname: str            = 'numbers',
     figsize: Tuple[int, int] = (6, 3),
 ) -> None:
@@ -145,17 +143,17 @@ def visualize_number_distribution(
     figname : output file path (PNG)
     figsize : figure size
     """
-    ns_np = ns.detach().cpu().numpy()
+
     plt.figure(figsize=figsize)
-    plt.bar(np.arange(ns_np.size), ns_np)
-    plt.xlabel('waveguide l')
+    plt.bar(np.arange(ns.size), ns)
+    plt.xlabel('mode l')
     plt.ylabel(r'intensity $\langle a^\dagger a \rangle$')
     plt.savefig(figname)
     plt.close()
 
 
 def visualize_entropy(
-    S:       MPDOtorch,
+    S:       np.ndarray,
     figname: str            = 'entropy',
     figsize: Tuple[int, int] = (6, 3),
 ) -> None:
@@ -168,10 +166,10 @@ def visualize_entropy(
     figname : output file path (PNG)
     figsize : figure size
     """
-    S_np = S.detach().cpu().numpy()
+
     plt.figure(figsize=figsize)
-    plt.plot(np.arange(S_np.size), S_np)
-    plt.xlabel('waveguide l')
+    plt.plot(np.arange(S.size), S)
+    plt.xlabel('mode l')
     plt.ylabel(r'Entropy $S_{vN}$')
     plt.savefig(figname)
     plt.close()

@@ -48,6 +48,9 @@ tensor-circuit-torch/
 │       │   └── g2_simulator_scan_vg.py    # Scan g²(0) vs group velocity v_g  [Fig. paper]
 |       |   └── analyze.ipynb              # analyze the scan run for k (figure from paper)
 |       |   └── analyze_vg.ipynb           # analyze the scan run for v_g (figure from paper)
+│   └── scripts/MZI_sim/
+│       ├── MZI_nonlinear.py               # Run the MZI, loop over parameters
+|       └── analyze.ipynb                  # Analyze the results from MZI run
 │   └── bash_scripts/
 |       |   └── loop_g2_circuit.sh         # shell script for scanning the circuit parameters 
 ```
@@ -66,7 +69,7 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-GPU acceleration is strongly recommended for circuits with more than ~6 channels or Nmax > 15.  The scripts default to `cuda:0`; pass `--device cpu` to run on CPU.
+GPU acceleration is strongly recommended for circuits with more than ~6 channels or Nmax > 15.  The scripts default to `cuda:0`; pass `--device cpu` to run on CPU. If no CUDA GPU available, it should work when you remove all the nvidia imports from `requirements.txt`
 
 ---
 
@@ -74,17 +77,22 @@ GPU acceleration is strongly recommended for circuits with more than ~6 channels
 
 The two main simulation results from the paper are reproduced by the scripts below.  Both scan the second-order coherence g²(0) and photon number across a physical parameter range for a fixed multimode nonlinear photonic circuit.
 
+### Reproducing the figures
+
 For reproducing Fig. 3 and Appendices Fig. 7-8:
 
-    - Run `python -m scripts.MZI_sim.MZI_nonlinear`
+- Run `python -m scripts.MZI_sim.MZI_nonlinear`
+- Analyze with the provided notebook
 
-    - Analyze with the provided notebook
+The code in this script makes use of the QuTiP library for the individual two-mode bosonic simulation: https://qutip.org/
 
 For reproducing Figs. 5 and 6:
 
-    - run the shell script (uncomment the right parameters for the nested loop)
-    
-    - run the 'analyze.ipynb' notebooks in experiments/ folder
+- run the shell script, uncomment the right parameters for the nested loop 
+        `./bash_scripts/loop_g2_circuit.sh`  
+    You may have to change permissions first:
+            `chmod a+x bash_scripts/loop_g2_circuit.sh`
+- run the `analyze(_vg).ipynb` notebooks in `experiments/` folder
 
 ### 1 — g²(0) vs wavevector *k*  (polariton dispersion scan)
 
@@ -106,6 +114,8 @@ python -m MPDO_circuit.experiments.g2_experiment.g2_simulator \
 | Relative input phase | `--phi` | `0.2π` | φ_rel in rad |
 | Output directory | `--writedir` | `data/<timestamp>` | Where to save results |
 | Device | `--device` | `cuda:0` | Torch device string |
+
+if no GPU available, change to `cpu` for device option
 
 **Output** (saved to `--writedir`):
 - `results.png` — 4-panel figure: photon densities, g²(0), effective nonlinearity U_k and exciton fraction, gate coupling J·Δt — all as a function of *k*.

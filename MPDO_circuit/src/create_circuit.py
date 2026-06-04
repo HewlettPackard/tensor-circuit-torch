@@ -427,7 +427,7 @@ def create_haar_random_circuit(
     -------
     MPDOCircuit
     """
-    K_ops = None if gamma < 1e-4 else dephasing_krauss_ops(gamma, device=device)
+    K_ops = None if gamma < 1e-4 else dephasing_kraus_ops(gamma, device=device)
 
     circuit_topology = [[None] * num_channels for _ in range(num_layers)]
     for d in range(num_layers):
@@ -520,7 +520,7 @@ def qubit_kraus_ops(
     ]
 
 
-def dephasing_krauss_ops(
+def dephasing_kraus_ops(
     gamma:  float,
     device: str = 'cpu',
 ) -> List[torch.Tensor]:

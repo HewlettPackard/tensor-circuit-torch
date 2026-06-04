@@ -111,9 +111,9 @@ class MPDOtorch:
                     cutoff_BD — relative SV cutoff for bond truncation
                     cutoff_PD — relative SV cutoff for purity truncation
         """
-        self.krauss_dissipation(K_ops=[], options=options)
+        self.kraus_dissipation(K_ops=[], options=options)
 
-    def krauss_dissipation(
+    def kraus_dissipation(
         self,
         K_ops:   Iterable[torch.Tensor],
         options: dict = {

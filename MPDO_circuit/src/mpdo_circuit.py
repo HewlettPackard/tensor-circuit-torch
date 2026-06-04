@@ -153,7 +153,7 @@ class MPDOCircuit:
                         print([rt.shape for rt in rho._B])
 
             if self.K_ops is not None and self.K_ops[d] is not None:
-                rho.krauss_dissipation(self.K_ops[d], options=options)
+                rho.kraus_dissipation(self.K_ops[d], options=options)
 
     def get_variables(self, flatten: bool = True) -> list:
         """
