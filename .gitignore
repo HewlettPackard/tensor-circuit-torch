@@ -20,7 +20,10 @@
 *.out
 
 # ignore venv
-*venv
+*.venv
+
+# ignore vscode files
+*.vscode
 
 # ignore MPS data
 

@@ -1,4 +1,4 @@
-# tensor-circuit-torch
+# tensor-circuit-torch/MPDO_circuit
 
 **MPDO simulation of quantum photon statistics in polaritonic integrated circuits.**
 
@@ -63,7 +63,7 @@ tensor-circuit-torch/
 
 ```bash
 git clone https://github.com/HewlettPackard/tensor-circuit-torch.git
-cd tensor-circuit-torch
+cd tensor-circuit-torch/MPDO_circuit
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
