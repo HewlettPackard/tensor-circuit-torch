@@ -27,7 +27,7 @@ concat_ensemble_from_list : stack a list of MPDOs along the batch dimension
 """
 
 from time import time
-from typing import Dict, Iterable, List, TypeVar
+from typing import Dict, Iterable, List, TypeVar, Tuple
 
 import numpy as np
 import torch
@@ -479,6 +479,143 @@ class MPDOtorch:
             1-D complex tensor of length ``num_channels``.
         """
         return torch.stack([self.local_expectation(op, il) for il in range(self.num_channels)])
+    
+    def correlation(
+        self,
+        op1: torch.Tensor,
+        sites: Tuple[int, int],
+        op2: "torch.Tensor | None" = None,
+    ) -> torch.Tensor:
+        """
+        Two-point correlator ⟨op1_i op2_j⟩ for a single pair of sites.
+
+        Parameters
+        ----------
+        op1   : (d×d) operator acting at ``sites[0]``.
+        sites : pair of site indices (i, j). Order doesn't matter; they are
+                sorted internally so the sweep always goes left to right.
+        op2   : (d×d) operator acting at ``sites[1]``. Defaults to ``op1``.
+
+        Returns
+        -------
+        torch.Tensor
+            Complex scalar ⟨op1_i op2_j⟩. If ``sites[0] == sites[1]``, this
+            reduces to the single-site expectation value ⟨op1 @ op2⟩_i.
+        """
+        start, end = sorted(sites)
+        op2 = op1 if op2 is None else op2
+
+        # coincident sites: <op1 op2> is just a local expectation value
+        if start == end:
+            return self.local_expectation(op1 @ op2, start)
+
+        # open the environment at the left site, inserting op1
+        B_resc = irescale(self._B[start], self.SL[start], ind=-3)
+        G = torch.einsum(
+            "biqj, birk, qr -> jk",
+            B_resc, B_resc.conj(), op1.to(B_resc.device),
+        )
+
+        # sweep the open bond-environment through the sites in between,
+        # tracing the ancilla/Kraus leg and the physical leg (identity) at each
+        for m in range(start + 1, end):
+            B = self._B[m]
+            G = torch.einsum(
+                "jk, bjlm, bkln -> mn",
+                G, B, B.conj(),
+            )
+
+        # close the environment at the right site, inserting op2
+        B = self._B[end]
+        corr = torch.einsum(
+            "jk, bjrm, bkqm, rq -> ",
+            G, B, B.conj(), op2.to(G.device),
+        )
+
+        return corr
+
+    def correlation_matrix(
+        self,
+        op1: torch.Tensor,
+        op2: "torch.Tensor | None" = None,
+        is_hermitian: bool = True,
+    ) -> torch.Tensor:
+        """
+        Two-point correlator matrix M_ij = ⟨op1_i op2_j⟩ over all site pairs.
+
+        Builds one bond-environment per row (anchored at site i with op1
+        inserted) and sweeps it rightward once, reading off M[i, j] at every
+        j > i as the environment passes through, rather than re-sweeping from
+        site i for each j independently. This brings the cost of the full
+        matrix down from O(N^3) (N^2 pairs, each an O(N) sweep) to O(N^2)
+        (N rows, each a single O(N) sweep).
+
+        Parameters
+        ----------
+        op1, op2 : (d×d) single-mode operators in the Fock basis.
+            op2 defaults to op1 if not given.
+        is_hermitian : if True (default), assumes op2 = op1^† so that
+            M_ji = conj(M_ij), and only sweeps the op1-anchored environment,
+            deriving the lower triangle by conjugation instead of building a
+            second (op2-anchored) environment. Set False if op1/op2 don't
+            satisfy this (e.g. op2 is not the conjugate-transpose of op1),
+            in which case both M_ij and M_ji are computed explicitly.
+
+        Returns
+        -------
+        torch.Tensor
+            (num_sites × num_sites) complex matrix.
+        """
+        if op2 is None:
+            op2 = op1
+
+        # diagonals are product expectation
+        op_diag = op1 @ op2
+
+        L = self.num_channels
+        device = self._B[0].device
+        dtype = self._B[0].dtype
+        C = torch.zeros((L, L), dtype=dtype, device=device)
+
+        for i in range(L):
+            # diagonal element: local expectation of the operator product
+            C[i, i] = self.local_expectation(op_diag, i)
+
+            # open the environment(s) at the anchor site i
+            B_resc = irescale(self._B[i], self.SL[i], ind=-3)
+            G1 = torch.einsum(
+                "biqj, birk, qr -> jk",
+                B_resc, B_resc.conj(), op1.to(device),
+            )
+            if not is_hermitian:
+                G2 = torch.einsum(
+                    "biqj, birk, qr -> jk",
+                    B_resc, B_resc.conj(), op2.to(device),
+                )
+
+            # single rightward sweep: close off M[i, j] (and M[j, i] if not
+            # hermitian) at every site j, then propagate past it
+            for j in range(i + 1, L):
+                Bj = self._B[j]
+
+                # shared partial contraction, computed once per site j
+                X1 = torch.einsum("jk, bjrm -> bkrm", G1, Bj)  # (batch, D, d, D)
+                if not is_hermitian:
+                    X2 = torch.einsum("jk, bjrm -> bkrm", G2, Bj)  # (batch, D, d, D)
+
+                C[i, j] = torch.einsum("bkrm, rq, bkqm -> ", X1, op2.to(device), Bj.conj())
+                if is_hermitian:
+                    C[j, i] = C[i, j].conj()
+                else:
+                    C[j, i] = torch.einsum("bkrm, rq, bkqm -> ", X2, op1.to(device), Bj.conj())
+
+                if j < L - 1:
+                    G1 = torch.einsum("bkrm, bkrn -> mn", X1, Bj.conj())
+                    if not is_hermitian:
+                        G2 = torch.einsum("bkrm, bkrn -> mn", X2, Bj.conj())
+
+        return C
+
 
     # ------------------------------------------------------------------
     # Two-site helpers

@@ -30,7 +30,8 @@ FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
 
 # directory to store data
-SAVE_DIR = os.path.join(FILE_DIR,"data", TIMESTAMP)
+# SAVE_DIR = os.path.join(FILE_DIR,"data", TIMESTAMP)
+SAVE_DIR = os.path.join(FILE_DIR,"data", 'results')
 
 
 
@@ -86,7 +87,7 @@ def iter_func(
     ##################################
 
     # compute trace distance
-    rho_try = rho_run.ptrace(rho_run.num_channels//2)
+    rho_try = rho_run.ptrace(rho_run.num_channels // 2)
     trace_dist = torch.linalg.eigvals(
         (rho_try - rho_target) * mask
     ).abs().sum()
@@ -99,8 +100,11 @@ def iter_func(
     # compute fidelity (with numpy, for sqrtm)
     rho_try_np, rho_target_np = rho_try.detach().cpu().numpy(), rho_target.detach().cpu().numpy()
     fidelity = np.trace(sqrtm(sqrtm(rho_try_np) @ rho_target_np @ sqrtm(rho_try_np))).real ** 2
-    rho_cond = rho_try_np
-    rho_cond[0,0] = 0.
+    
+    # compute conditioned fidelity
+    rho_cond = rho_try_np.copy()
+    rho_cond[0,:] = 0.
+    rho_cond[:,0] = 0.
     rho_cond = rho_cond / np.trace(rho_cond)
     fidelity_cond = np.trace(sqrtm(sqrtm(rho_cond) @ rho_target_np @ sqrtm(rho_cond))).real ** 2
 
@@ -110,6 +114,7 @@ def iter_func(
     tracker.add('entropy_penalty', entropy_penalty)
     tracker.add('fidelity', fidelity)
     tracker.add('fidelity_cond', fidelity_cond)
+    tracker.add('rho_try', rho_try_np)
 
 
     # visuals
@@ -128,12 +133,29 @@ def iter_func(
         circuit.get_coupling_matrix(), 
         filename=os.path.join(SAVE_DIR, "circuit")
         )
+
+    # visualization of DMs
+    fig, ax = plt.subplots(1,3, figsize=(6,3))
+    ax[0].matshow(rho_try_np.real)
+    ax[0].set_title(r'$\rho$')
+    ax[1].matshow(rho_cond.real)
+    ax[1].set_title(r'$\rho_{{cond}}$')
+    ax[2].matshow(rho_target_np.real)
+    ax[2].set_title(r'$\rho_{{tar}}$')
+
+    fig.savefig(os.path.join(SAVE_DIR, "rho"))
+    plt.close()
     
     # store data until last run
     tracker.save(os.path.join(SAVE_DIR, 'data.pkl'))
 
+    # print info
     print(
-        f"FOM: {FOM:.2f}, trace dist.: {trace_dist:.2f}, entropy penalty: {entropy_penalty:.2f}, fidelity: {fidelity:.2f}, cond. fid.: {fidelity_cond:.2f}")
+        f"FOM: {FOM:.2f}, trace dist.: {trace_dist:.2f}, entropy penalty: {entropy_penalty:.2f}, fidelity: {fidelity:.2f}, cond. fid.: {fidelity_cond:.2f}"
+        )
+
+    print(f"max. BD: {rho_run.get_BDs()}")
+    
 
     return FOM
 
@@ -143,10 +165,10 @@ if __name__ == "__main__":
 
     device = "cuda:5"
     
-    Nmax = 10 # Fock dim
-    num_channels = 11 # num channels
+    Nmax = 5 # Fock dim
+    num_channels = 3 # num channels
     num_layers = 25 # num circuit layers
-    coupling_init = 0.05 # initial value for starting the convergence
+    coupling_init = 0.01  # initial value for starting the convergence
     U = 0.25 # gate nonlinearity
     gamma_dt = 0.0 # loss rate (percentage): CLI overwritten
     target = "cat"
@@ -159,12 +181,10 @@ if __name__ == "__main__":
 
     # options
     options_ADAM = {
-        'lr': 1e-1, 'max_epochs': 100, 'param_lims': [0, np.pi]
+        'lr': 1e-1, 'max_epochs': 150, 'param_lims': [0., np.pi]
         }
-    options_MPDO = {'max_BD': 500, 'max_PD': 100, 'cutoff_BD': 1e-6, 'cutoff_PD': 1e-5}
+    options_MPDO = {'max_BD': 5000, 'max_PD': 100, 'cutoff_BD': 1e-12, 'cutoff_PD': 1e-5}
 
-    # to store results
-    writedir = os.path.join(FILE_DIR, "data", TIMESTAMP)
 
 
 
@@ -176,8 +196,8 @@ if __name__ == "__main__":
     rho = MPDOtorch(list_ten)
 
     # create write dir
-    if not os.path.exists(writedir):
-        os.makedirs(writedir)
+    if not os.path.exists(SAVE_DIR):
+        os.makedirs(SAVE_DIR)
 
     #######################################
     #       PREPARE CIRCUIT
@@ -220,7 +240,7 @@ if __name__ == "__main__":
     d = range(Nmax + 1)
     mask[d,d] = 1. * torch.ones(Nmax + 1, device=device)
     mask[0,0] = weight_zero
-    mask[1,1] = 1
+    mask[1,1] = 1.
     mask = mask / mask.norm()
 
     objective = lambda it, rho, obj_params, do_tracking: iter_func(

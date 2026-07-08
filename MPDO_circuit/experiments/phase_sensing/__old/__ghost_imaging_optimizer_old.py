@@ -14,9 +14,9 @@ from src.mpdo_circuit import MPDOCircuit
 from src.mpdo_torch import StateCreator, MPDOtorch
 from src.utils import BosonOperatorsTorch, eye_like
 from src.create_circuit import create_nonlinear_photonic_circuit, create_phase_circuit, amplitude_damping_kraus_ops
-from src.mpdo_optimizer import epoch_optimize, sweeping_optimize
+from src.mpdo_optimizer import epoch_optimize
 from src.tracker import Tracker
-from experiments.phase_sensing.sensing_utils import (
+from experiments.phase_sensing.__old.sensing_utils import (
     quantum_Fisher_information, Gaussian_Fisher_information, number_Fisher_information,
     homodyne_Fisher_information
 )
@@ -137,16 +137,14 @@ def iter_func(
         tracker.add('PFI', PFI)
         tracker.add('HFI', HFI)
         tracker.add('GFI', GFI)
-        tracker.add('N_signal', ns_phase[-1])
         tracker.add('J_init', J_init)
         tracker.add('J_read', J_read)
         tracker.add('U', U_it)
 
         # visualization of Tracker
         tracker.visualize(
-            key_plot=['QFI','PFI', 'GFI', 'N_signal'], 
-            labels=['Quantum FI','Number FI', 'Gaussian FI', 'signal strength'],
-            markers = ['k-', 'b-', 'r-', ':k'],
+            key_plot=['QFI','SNL','PFI', 'GFI', 'HFI'], 
+            markers = ['k-', 'k:', 'tab:gray', 'b', 'r'],
             filename=os.path.join(SAVE_DIR, "FOM")
             )
         
@@ -185,12 +183,8 @@ def iter_func(
         TypeError('Invalid FI type, choose from Gaussian, homodyne, number or quantum.')
 
     # compute L1 penalty for violating signal intensity
-    alpha = 0.8
-    signal_penalty =  (ns_phase[-1] - target_intensity).abs() ** 2
-
-    return_target = - target + signal_penalty
-    print(f"FOM={return_target}\n")
-    return return_target
+    signal_penalty = 10 * (ns_phase[-1] - target_intensity).abs()
+    return -target + signal_penalty
 
     
 
@@ -224,9 +218,9 @@ if __name__ == "__main__":
     ex_frac = exciton_fraction(k_ref)
 
     # initial state
-    signal_intensity = 2.
-    probe_intensity = 1.
-    target_signal = 1.
+    signal_intensity = 0.
+    probe_intensity = 3.
+    target_signal = 0.5
     # type Fisher information
     type_FI = 'Gaussian'
 
@@ -235,8 +229,7 @@ if __name__ == "__main__":
 
     # optimizer options
     optimizer_type = 'ADAM'
-    max_epochs = 20
-    max_sweeps = 50
+    max_epochs = 2000
     iter_alternate = None
     epoch_optim_clear = None
     iter_g_converge = 1 # number of iterations before full g is reached
@@ -255,8 +248,8 @@ if __name__ == "__main__":
     state_creator = StateCreator(Nmax, num_batch=1)
 
     # create MPDO from tensors (product state coherent)
-    input_intensity = [signal_intensity] * num_channels
-    input_intensity[-1] = probe_intensity
+    input_intensity = [probe_intensity] * num_channels
+    input_intensity[-1] = signal_intensity
     alphas = [np.sqrt(I) for I  in input_intensity]
     list_ten = state_creator.product_state_coherent(alphas, device=device)
     rho = MPDOtorch(list_ten)
@@ -317,40 +310,60 @@ if __name__ == "__main__":
         do_tracking=do_tracking
         )
 
-    # extract all parameters to optimize
+
     obj_params = (
         [circuit_init.get_J_matrix(float_vals=False)]
         + [circuit_read.get_J_matrix(float_vals=False)] 
         + [f_U]
     )
 
-    # assign the right parameters to the set of optimizers
-    num_layers = num_layers_init + num_layers_read
-    coupling_matrix = circuit_init.get_J_matrix(float_vals=False)
-    optimizers = []
-    for d in range(num_layers_init):
-        vars = [var for var in coupling_matrix[d] if var is not None]
-        optimizers.append(
+
+    if iter_alternate is None:
+        optimizer = (
             torch.optim.Adam(
-                vars, 
+                circuit_init.get_variables() + circuit_read.get_variables() + circuit_phase.get_variables(), 
                 **options_ADAM
+            ) if optimizer_type=='ADAM' else
+            torch.optim.LBFGS(
+                circuit_init.get_variables() + circuit_read.get_variables() + circuit_phase.get_variables(), 
+                **options_LBFGS
+            )
+        )
+        
+        optimizer_alt = None
+    else:
+        optimizer = (
+            torch.optim.Adam(
+                circuit_read.get_variables(), **options_ADAM
+            ) if optimizer_type == 'ADAM' else
+            torch.optim.LBFGS(
+                circuit_read.get_variables(), **options_LBFGS
+            )
+        )
+
+        optimizer_alt = (
+            torch.optim.Adam(
+                circuit_init.get_variables(), **options_ADAM
+            ) if optimizer_type == 'ADAM' else
+            torch.optim.LBFGS(
+                circuit_init.get_variables(), **options_LBFGS
             )
         )
 
     # create folder to save
     os.makedirs(SAVE_DIR, exist_ok=True)
 
-
-
     # train the circuit
-    sweeping_optimize(
-        objectives = [objective] * num_layers_init,
-        optimizers=optimizers,
-        final_optimizer=None,
-        rho=rho,
-        max_sweeps=max_sweeps,
-        max_epochs=max_epochs,
+    epoch_optimize(
+        objective, 
+        optimizer=optimizer, 
+        optimizer_alt=optimizer_alt, 
+        rho=rho, 
+        max_epochs=max_epochs, 
+        iter_alternate=iter_alternate,
         obj_params=obj_params,
-        param_lims=param_lims
-    )
-
+        param_lims=param_lims,
+        epoch_optim_clear=epoch_optim_clear
+        )
+            
+    

@@ -13,10 +13,10 @@ from datetime import datetime
 from src.mpdo_circuit import MPDOCircuit
 from src.mpdo_torch import StateCreator, MPDOtorch
 from src.utils import BosonOperatorsTorch, eye_like
-from src.create_circuit import create_nonlinear_photonic_circuit, create_phase_circuit, amplitude_damping_kraus_ops
+from src.create_circuit import create_nonlinear_photonic_circuit, create_phase_circuit
 from src.mpdo_optimizer import epoch_optimize
 from src.tracker import Tracker
-from experiments.phase_sensing.sensing_utils import (
+from experiments.phase_sensing.__old.sensing_utils import (
     quantum_Fisher_information, Gaussian_Fisher_information, number_Fisher_information,
     homodyne_Fisher_information
 )
@@ -79,13 +79,12 @@ def iter_func(
         it: int,
         phases: List[float],
         type_FI: str='Gaussian',
-        target_intensity: float=1.,
         verbose: bool=True,
         obj_params: List[Any]|None=None,
         do_tracking=False,
         ) -> torch.tensor:
     
-    type_FI = ("quantum" if iter_alternate is not None and it % (iter_alternate[0] + iter_alternate[1]) >= iter_alternate[0]
+    type_FI = ("quantum" if it % (iter_alternate[0] + iter_alternate[1]) >= iter_alternate[0]
                else type_FI
                )
 
@@ -101,13 +100,8 @@ def iter_func(
     # clone the output
     rho_dtheta = rho.clone()
 
-    # amplitude Krauss op
-    K_ops = amplitude_damping_kraus_ops(d_theta * 2., Nmax=rho.Nmax, device=rho.device)
-    rho_dtheta[-1] = torch.einsum("ij, bkjl->bkil", K_ops[0], rho_dtheta[-1])
-    rho_dtheta.canonical_form(options=options_MPDO)
-
     # apply phase shift
-    # circuit_phase.run(rho_dtheta, options=options_MPDO)
+    circuit_phase.run(rho_dtheta, options=options_MPDO)
 
     # store QFI
     QFI = quantum_Fisher_information(rho, rho_dtheta, d_theta)
@@ -124,9 +118,9 @@ def iter_func(
     circuit_read.run(rho_dtheta, options=options_MPDO)
 
     # evaluate FIs
-    GFI = Gaussian_Fisher_information(rho, rho_dtheta, d_theta, i_exclude=num_channels-1) 
-    HFI = homodyne_Fisher_information(rho, rho_dtheta, d_theta, i_exclude=num_channels-1)
-    PFI = number_Fisher_information(rho, rho_dtheta, d_theta, i_exclude=num_channels-1)
+    GFI = Gaussian_Fisher_information(rho, rho_dtheta, d_theta) 
+    HFI = homodyne_Fisher_information(rho, rho_dtheta, d_theta)
+    PFI = number_Fisher_information(rho, rho_dtheta, d_theta)
 
     # if tracking and visualization is needed
     if do_tracking:
@@ -165,8 +159,6 @@ def iter_func(
         if verbose:
             print(f'n_i: {rho.number_outcomes().detach().cpu().numpy()}')
             print(f'QFI: {QFI}, PFI: {PFI}, GFI: {GFI}, HFI: {HFI}')
-            print(f"BDs: {rho.get_BDs()}")
-            #print(f"thetas: {[circuit_phase.circuit_topology[0][l].phi.float() for l in range(num_channels)]}")
             # print(f'parameters init: {circuit_init.get_variables()}')
             # print(f'parameters read: {circuit_read.get_variables()}')
 
@@ -181,10 +173,7 @@ def iter_func(
         target = PFI
     else:
         TypeError('Invalid FI type, choose from Gaussian, homodyne, number or quantum.')
-
-    # compute L1 penalty for violating signal intensity
-    signal_penalty = 10 * (ns_phase[-1] - target_intensity).abs()
-    return -target + signal_penalty
+    return -target
 
     
 
@@ -194,18 +183,18 @@ def iter_func(
 
 if __name__ == "__main__":
 
-    device = "cuda:1"
+    device = "cuda:0"
 
     # circuit topology and number cutoff tensor
     num_channels = 4
-    num_layers_init = 10
-    num_layers_read = 0
-    Nmax = 10
+    num_layers_init = 6
+    num_layers_read = 12
+    Nmax = 15
 
     # circuit parameters
     g_ex = 10. # ueV * um^2, for excitons, gets scaled with exciton fraction of polaritons
     layer_length = 100 # um
-    J_init_init = 0.1
+    J_init_init = 0.01
     J_init_read = 0.01 # ps^{-1}, linear tunnel rate
     pulse_duration = 1 # ps
     pulse_transverse = 0.5 # um
@@ -218,22 +207,21 @@ if __name__ == "__main__":
     ex_frac = exciton_fraction(k_ref)
 
     # initial state
-    signal_intensity = 0.
-    probe_intensity = 3.
-    target_signal = 0.5
+    input_intensity = [1.] * num_channels # average number of photons per pulse (Poissonian)
+
     # type Fisher information
     type_FI = 'Gaussian'
 
     # optimizer and MPDO options
-    options_MPDO = {'max_BD': 100, 'max_PD': 100, 'cutoff_BD': 1e-6, 'cutoff_PD': 1e-6}
+    options_MPDO = {'max_BD': 100, 'max_PD': 100, 'cutoff_BD': 1e-9, 'cutoff_PD': 1e-9}
 
     # optimizer options
     optimizer_type = 'ADAM'
     max_epochs = 2000
-    iter_alternate = None
+    iter_alternate = [20,1]
     epoch_optim_clear = None
     iter_g_converge = 1 # number of iterations before full g is reached
-    options_ADAM = {'lr': 1e-3}
+    options_ADAM = {'lr': 5e-3}
     options_LBFGS =  {
         'lr': 1e-2, 
         'max_iter': 5, 
@@ -248,8 +236,6 @@ if __name__ == "__main__":
     state_creator = StateCreator(Nmax, num_batch=1)
 
     # create MPDO from tensors (product state coherent)
-    input_intensity = [probe_intensity] * num_channels
-    input_intensity[-1] = signal_intensity
     alphas = [np.sqrt(I) for I  in input_intensity]
     list_ten = state_creator.product_state_coherent(alphas, device=device)
     rho = MPDOtorch(list_ten)
@@ -285,17 +271,14 @@ if __name__ == "__main__":
     # readout
     d['num_layers'] = num_layers_read
     d['J'] = J_init_read
-    d['right_stop'] = num_channels - 1 # exclude right channel from interference
     circuit_read = create_nonlinear_photonic_circuit(**d, device=device)
 
     # phase shift
-    phases = [[d_theta if i == num_channels-1 else 0. for i in range(num_channels)]]
-    requires_grad = [[False if i == num_channels-1 else False for i in range(num_channels)]]
+    phases = [[d_theta if i == num_channels // 2 else None for i in range(num_channels)]]
     circuit_phase = create_phase_circuit(
         Nmax=Nmax,
-        phase = phases,
-        device=device,
-        requires_grad=requires_grad
+        phase=phases,
+        device=device
     )
 
 
@@ -304,7 +287,7 @@ if __name__ == "__main__":
     objective = lambda it, rho, obj_params, do_tracking: iter_func(
         rho, 
         circuit_init, circuit_phase, circuit_read, options_MPDO=options_MPDO,
-        tracker=tracker, d_theta=d_theta, it=it, type_FI=type_FI, target_intensity=target_signal,
+        tracker=tracker, d_theta=d_theta, it=it, type_FI=type_FI,
         phases=phases[0],
         obj_params=obj_params,
         do_tracking=do_tracking
@@ -321,12 +304,10 @@ if __name__ == "__main__":
     if iter_alternate is None:
         optimizer = (
             torch.optim.Adam(
-                circuit_init.get_variables() + circuit_read.get_variables() + circuit_phase.get_variables(), 
-                **options_ADAM
+                circuit_init.get_variables() + circuit_read.get_variables(), **options_ADAM
             ) if optimizer_type=='ADAM' else
             torch.optim.LBFGS(
-                circuit_init.get_variables() + circuit_read.get_variables() + circuit_phase.get_variables(), 
-                **options_LBFGS
+                circuit_init.get_variables() + circuit_read.get_variables(), **options_LBFGS
             )
         )
         

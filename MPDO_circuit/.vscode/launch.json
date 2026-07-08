@@ -1,0 +1,65 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },   
+                {
+            "name": "MZI_SPG",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "experiments.single_coupler_SPG.nonlinear_MZI_torch"
+        },
+        {
+            "name": "g2-experiment",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "experiments.g2_experiment.g2_simulator"
+        },
+        {
+            "name": "stategen",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "experiments.state_gen.main"
+        },
+        {
+            "name": "g2-optim",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "experiments.g2_experiment.g2_optimizer"
+        },
+
+        {
+            "name": "phase-sensing",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "experiments.phase_sensing.sensing_optimizer"
+        },
+        {
+            "name": "phase-sensing-alternate",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "experiments.phase_sensing.sensing_optimizer_alternate"
+        },
+        {
+            "name": "ghost-imaging",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "experiments.phase_sensing.ghost_imaging_optimizer"
+        },
+        {
+            "name": "pulse",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "experiments.photon_pulse.pulse_MPDO"
+        }
+
+    ]
+}

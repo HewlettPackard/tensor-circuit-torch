@@ -16,7 +16,7 @@ from src.utils import BosonOperatorsTorch, eye_like
 from src.create_circuit import create_nonlinear_photonic_circuit, create_phase_circuit
 from src.mpdo_optimizer import epoch_optimize
 from src.tracker import Tracker
-from experiments.phase_sensing.sensing_utils import (
+from experiments.phase_sensing.__old.sensing_utils import (
     quantum_Fisher_information, Gaussian_Fisher_information, number_Fisher_information,
     homodyne_Fisher_information
 )
@@ -83,10 +83,6 @@ def iter_func(
         obj_params: List[Any]|None=None,
         do_tracking=False,
         ) -> torch.tensor:
-    
-    type_FI = ("quantum" if it % (iter_alternate[0] + iter_alternate[1]) >= iter_alternate[0]
-               else type_FI
-               )
 
     # update circuits with the parameters
     J_init, J_read = obj_params[0], obj_params[1]
@@ -131,8 +127,8 @@ def iter_func(
         tracker.add('PFI', PFI)
         tracker.add('HFI', HFI)
         tracker.add('GFI', GFI)
-        tracker.add('J_init', J_init)
-        tracker.add('J_read', J_read)
+        tracker.add('J_init', circuit_init.get_J_matrix())
+        tracker.add('J_read', circuit_read.get_J_matrix())
         tracker.add('U', U_it)
 
         # visualization of Tracker
@@ -183,19 +179,19 @@ def iter_func(
 
 if __name__ == "__main__":
 
-    device = "cuda:0"
+    device = "cuda:1"
 
     # circuit topology and number cutoff tensor
-    num_channels = 4
+    num_channels = 2
     num_layers_init = 6
-    num_layers_read = 12
-    Nmax = 15
+    num_layers_read = 6
+    Nmax = 10
 
     # circuit parameters
-    g_ex = 10. # ueV * um^2, for excitons, gets scaled with exciton fraction of polaritons
+    g_ex = 5. # ueV * um^2, for excitons, gets scaled with exciton fraction of polaritons
     layer_length = 100 # um
-    J_init_init = 0.01
-    J_init_read = 0.01 # ps^{-1}, linear tunnel rate
+    J_start_init = 0.01
+    J_start_read = 0.78 # ps^{-1}, linear tunnel rate
     pulse_duration = 1 # ps
     pulse_transverse = 0.5 # um
     gamma = 0.0 # dissipation rate, in ps^{-1}
@@ -217,8 +213,9 @@ if __name__ == "__main__":
 
     # optimizer options
     optimizer_type = 'ADAM'
-    max_epochs = 2000
-    iter_alternate = [20,1]
+    max_epochs_QFI = 500
+    max_epochs_CFI = 50
+    #iter_alternate = [100,100]
     epoch_optim_clear = None
     iter_g_converge = 1 # number of iterations before full g is reached
     options_ADAM = {'lr': 5e-3}
@@ -248,7 +245,7 @@ if __name__ == "__main__":
     U = torch.tensor(
         ex_frac ** 2 * g_ex / (pulse_duration * group_velocity * pulse_transverse)
     )
-    f_U = lambda it: torch.min(U, (it+1) / iter_g_converge * U)
+    f_U = lambda it: torch.min(U, (it + 1) / iter_g_converge * U)
 
     print(f'\noptimizing {num_channels} WGs, init_layers: {num_layers_init}, read layers: {num_layers_read}, gate nonlinearity: {U}.\n')
 
@@ -258,7 +255,7 @@ if __name__ == "__main__":
     d = dict(
         num_layers = num_layers_init,
         U = U, 
-        J =  J_init_init / dt_gate,
+        J =  J_start_init / dt_gate,
         gamma = gamma / dt_gate,
         order_krauss = 1,
         dt = dt_gate,
@@ -270,14 +267,14 @@ if __name__ == "__main__":
 
     # readout
     d['num_layers'] = num_layers_read
-    d['J'] = J_init_read
+    d['J'] = J_start_read
     circuit_read = create_nonlinear_photonic_circuit(**d, device=device)
 
     # phase shift
     phases = [[d_theta if i == num_channels // 2 else None for i in range(num_channels)]]
     circuit_phase = create_phase_circuit(
         Nmax=Nmax,
-        phase=phases,
+        phase = phases,
         device=device
     )
 
@@ -287,7 +284,7 @@ if __name__ == "__main__":
     objective = lambda it, rho, obj_params, do_tracking: iter_func(
         rho, 
         circuit_init, circuit_phase, circuit_read, options_MPDO=options_MPDO,
-        tracker=tracker, d_theta=d_theta, it=it, type_FI=type_FI,
+        tracker=tracker, d_theta=d_theta, it=it, type_FI='quantum',
         phases=phases[0],
         obj_params=obj_params,
         do_tracking=do_tracking
@@ -300,51 +297,83 @@ if __name__ == "__main__":
         + [f_U]
     )
 
+    optimizer_QFI = (
+        torch.optim.Adam(
+            circuit_init.get_variables(), **options_ADAM
+        ) if optimizer_type == 'ADAM' else
+        torch.optim.LBFGS(
+            circuit_init.get_variables(), **options_LBFGS
+        )
+    )
 
-    if iter_alternate is None:
-        optimizer = (
-            torch.optim.Adam(
-                circuit_init.get_variables() + circuit_read.get_variables(), **options_ADAM
-            ) if optimizer_type=='ADAM' else
-            torch.optim.LBFGS(
-                circuit_init.get_variables() + circuit_read.get_variables(), **options_LBFGS
-            )
+    optimizer_CFI = (
+        torch.optim.Adam(
+            circuit_read.get_variables(), **options_ADAM
+        ) if optimizer_type == 'ADAM' else
+        torch.optim.LBFGS(
+            circuit_read.get_variables(), **options_LBFGS
         )
-        
-        optimizer_alt = None
-    else:
-        optimizer = (
-            torch.optim.Adam(
-                circuit_read.get_variables(), **options_ADAM
-            ) if optimizer_type == 'ADAM' else
-            torch.optim.LBFGS(
-                circuit_read.get_variables(), **options_LBFGS
-            )
-        )
-
-        optimizer_alt = (
-            torch.optim.Adam(
-                circuit_init.get_variables(), **options_ADAM
-            ) if optimizer_type == 'ADAM' else
-            torch.optim.LBFGS(
-                circuit_init.get_variables(), **options_LBFGS
-            )
-        )
+    )
 
     # create folder to save
     os.makedirs(SAVE_DIR, exist_ok=True)
 
-    # train the circuit
+    # train the circuit for QFI
     epoch_optimize(
         objective, 
-        optimizer=optimizer, 
-        optimizer_alt=optimizer_alt, 
+        optimizer=optimizer_QFI, 
         rho=rho, 
-        max_epochs=max_epochs, 
-        iter_alternate=iter_alternate,
+        max_epochs=max_epochs_QFI, 
         obj_params=obj_params,
         param_lims=param_lims,
         epoch_optim_clear=epoch_optim_clear
         )
+    
+    # select maximal quantum information circuit
+    it_max_QFI = np.argmax(tracker['QFI'])
+
+    # make J values tensors
+    J_init = [
+        [torch.tensor(J, requires_grad=False, device=device) if J else None
+         for J in layer] 
+        for layer in tracker['J_init'][it_max_QFI]
+        ]
+    J_read = [
+        [torch.tensor(J, requires_grad=True, device=device) if J else None
+         for J in layer] 
+        for layer in tracker['J_read'][it_max_QFI]
+        ]
+    
+    obj_params = [
+        J_init,
+        J_read,
+        lambda it: torch.tensor(tracker['U'][it_max_QFI])
+        ]
+    
+    # set objective (return FI) 
+    objective = lambda it, rho, obj_params, do_tracking: iter_func(
+        rho, 
+        circuit_init, circuit_phase, circuit_read, options_MPDO=options_MPDO,
+        tracker=tracker, d_theta=d_theta, it=it, type_FI=type_FI,
+        phases=phases[0],
+        obj_params=obj_params,
+        do_tracking=do_tracking
+        )
+    
+    # train the circuit for CFI
+    epoch_optimize(
+        objective, 
+        optimizer=optimizer_CFI, 
+        rho=rho, 
+        max_epochs=max_epochs_CFI, 
+        obj_params=obj_params,
+        param_lims=param_lims,
+        epoch_optim_clear=epoch_optim_clear
+        )
+    
+
+
+
+
             
     
