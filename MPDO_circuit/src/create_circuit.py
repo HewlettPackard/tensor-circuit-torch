@@ -338,7 +338,7 @@ def create_phase_circuit(
         'max_BD': 100, 'max_PD': 100,
         'cutoff_BD': 1e-6, 'cutoff_PD': 1e-6,
     },
-    requires_grad: "List[List[bool]] | bool | None" = None,
+    requires_grad: "List[List[bool]] | bool" = False,
     device:        str                     = "cuda:0",
 ) -> PhaseCircuit:
     """
@@ -366,6 +366,9 @@ def create_phase_circuit(
         num_layers   = len(phase)
 
     circuit_topology = [[None] * num_channels for _ in range(num_layers)]
+
+    if isinstance(requires_grad, bool):
+        requires_grad = num_layers * [num_channels * [requires_grad]]
 
     for d in range(num_layers):
         for l in range(num_channels):
@@ -439,6 +442,48 @@ def create_haar_random_circuit(
         circuit_topology=CircuitTopology(circuit_topology),
         K_ops=K_ops,
     )
+
+
+def create_qubit_circuit(
+    num_layers:   int,
+    num_channels: int,
+    params:       List[List[List[float]]],
+    gamma:        float = 0.,
+    device:       str   = "cuda:0",
+) -> MPDOCircuit:
+    """
+    Create a Haar-random qubit (or bosonic) circuit for benchmarking.
+
+    Gates are placed in a staggered brick pattern; dephasing Kraus operators
+    are applied when gamma > 0.
+
+    Parameters
+    ----------
+    num_layers   : circuit depth
+    num_channels : number of modes
+    Nmax         : Fock-space truncation (1 = qubit)
+    dt           : gate duration (unused for Haar gates, kept for API symmetry)
+    gamma        : qubit dephasing rate; 0 → unitary circuit
+    device       : Torch device string
+
+    Returns
+    -------
+    MPDOCircuit
+    """
+    # K_ops = None if gamma < 1e-4 else dephasing_krauss_ops(gamma, device=device)
+
+    # circuit_topology = [[None] * num_channels for _ in range(num_layers)]
+    # for d in range(num_layers):
+    #     for l in range(num_channels - 1):
+    #         if (d + l) % 2 == 0:
+    #             circuit_topology[d][l] = HaarCouplingGate(Nmax=Nmax, device=device)
+
+    # return MPDOCircuit(
+    #     circuit_topology=CircuitTopology(circuit_topology),
+    #     K_ops=K_ops,
+    # )
+
+    return 0
 
 
 # ---------------------------------------------------------------------------

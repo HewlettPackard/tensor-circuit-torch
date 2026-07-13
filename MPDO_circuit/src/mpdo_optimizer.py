@@ -118,7 +118,7 @@ def epoch_optimize(
             with torch.no_grad():
                 rho_local = rho.clone()
 
-            loss = objective(epoch, rho_local, obj_params, do_tracking=True)
+            loss = objective(epoch, rho_local, obj_params)
 
             if torch.isnan(loss):
                 print("Objective is NaN — stopping.")

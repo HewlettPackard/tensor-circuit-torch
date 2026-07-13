@@ -228,3 +228,90 @@ def Haar_unitary(n: int, device: str = 'cpu') -> torch.Tensor:
     Q      = Q * phases.conj().unsqueeze(0)           # broadcast across rows
 
     return Q
+
+
+# ---------------------------------------------------------------------------
+# Parametrized SU(4) definition (Cartan KAK decomposition)
+# ---------------------------------------------------------------------------
+
+def su2_ZYZ(theta: torch.Tensor, phi: torch.Tensor, lam: torch.Tensor, device: str='cpu'):
+    """Single-qubit SU(2) gate via ZYZ Euler decomposition."""
+    c, s = torch.cos(theta / 2), torch.sin(theta / 2)
+    return torch.stack([
+        torch.stack([c, -torch.exp(1j * lam) * s]),
+        torch.stack([torch.exp(1j * phi) * s, torch.exp(1j * (phi + lam)) * c]),
+    ]).to(device)
+
+def su2(alpha: torch.Tensor, theta_n: torch.Tensor, phi_n: torch.Tensor, device: str = 'cpu'):
+    """
+    Single-qubit SU(2) gate via axis-angle (Bloch rotation) parametrization.
+
+    U = exp(-i * alpha/2 * n_hat . sigma), with n_hat given in spherical
+    coordinates (theta_n, phi_n) on the Bloch sphere.
+
+    Parameters
+    ----------
+    alpha   : rotation angle about n_hat.
+    theta_n : polar angle of the rotation axis n_hat (0 <= theta_n <= pi).
+    phi_n   : azimuthal angle of the rotation axis n_hat.
+
+    Returns
+    -------
+    torch.Tensor
+        2x2 complex SU(2) matrix.
+    """
+    nx = torch.sin(theta_n) * torch.cos(phi_n)
+    ny = torch.sin(theta_n) * torch.sin(phi_n)
+    nz = torch.cos(theta_n)
+
+    c = torch.cos(alpha / 2)
+    s = torch.sin(alpha / 2)
+
+    # n_hat . sigma = [[nz, nx - i ny], [nx + i ny, -nz]]
+    U = torch.stack([
+        torch.stack([c - 1j * s * nz,        -1j * s * (nx - 1j * ny)]),
+        torch.stack([-1j * s * (nx + 1j * ny), c + 1j * s * nz]),
+    ]).to(device)
+
+    return U
+
+def canonical_core(tx: torch.Tensor, ty: torch.Tensor, tz: torch.Tensor, device: str='cpu'):
+    """N(theta_x, theta_y, theta_z) = exp[i(tx XX + ty YY + tz ZZ)]."""
+    X = torch.tensor([[0, 1], [1, 0]], dtype=torch.complex128, device=device)
+    Y = torch.tensor([[0, -1j], [1j, 0]], dtype=torch.complex128, device=device)
+    Z = torch.tensor([[1, 0], [0, -1]], dtype=torch.complex128, device=device)
+    XX = torch.kron(X, X)
+    YY = torch.kron(Y, Y)
+    ZZ = torch.kron(Z, Z)
+    H = tx * XX + ty * YY + tz * ZZ
+    return torch.matrix_exp(1j * H)
+
+def general_two_qubit_gate(params: torch.Tensor, device: str='cpu'):
+    """
+    params: 15-length real tensor (with requires_grad=True for optimization).
+    
+    Structure
+    U   =   (A1⊗A2) ⋅ N(θx,θy,θz) ⋅ (B1⊗B2) 
+
+
+    A1, A2, B1, B2 ​∈ SU(2):
+        arbitrary single-qubit gates before/after — 4 x 3 = 12 parameters
+        
+        The 3 parameters:     
+            alpha   : rotation angle about n_hat.
+            theta_n : polar angle of the rotation axis n_hat (0 <= theta_n <= pi).
+            phi_n   : azimuthal angle of the rotation axis n_hat.
+
+    N(θx,θy,θz) = exp[i(θx XX + θy YY + θz ZZ)]:
+        the nonlocal core, exactly 3 parameters, carrying all the entangling power of the gate
+    """
+
+    A1 = su2(*params[0:3], device)
+    A2 = su2(*params[3:6], device)
+    tx, ty, tz = params[6:9]
+    B1 = su2(*params[9:12], device)
+    B2 = su2(*params[12:15], device)
+
+    N = canonical_core(tx, ty, tz, device)
+    U = torch.kron(A1, A2) @ N @ torch.kron(B1, B2)
+    return U

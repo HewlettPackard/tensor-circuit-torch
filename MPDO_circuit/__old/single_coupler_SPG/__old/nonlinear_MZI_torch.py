@@ -18,7 +18,7 @@ from src.create_circuit import create_nonlinear_mzi_circuit
 from src.tracker import Tracker
 from src.visualize import visualize_circuit
 
-from experiments.single_coupler_SPG.__old.nonlinear_MZI_Gauss import solve_ODE_AS_mode, get_g2
+from __old.single_coupler_SPG.__old.nonlinear_MZI_Gauss import solve_ODE_AS_mode, get_g2
 
 import numpy as np
 

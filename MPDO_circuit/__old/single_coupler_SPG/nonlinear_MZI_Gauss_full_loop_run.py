@@ -4,7 +4,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import product
 from pathlib import Path
 
-from ODE_AS_integrate import solve_ODE_AS_mode
+from __old.single_coupler_SPG.ODE_AS_integrate import solve_ODE_AS_mode
 
 
 # ---------------------------------------------------------------------------

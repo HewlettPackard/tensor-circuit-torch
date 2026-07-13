@@ -84,7 +84,7 @@ def visualize_circuit(
 
         # Phase-shift layer
         if phase_shifts is not None and i_l == layer_phase_shift:
-            for i_g, phase in enumerate(phase_shifts['positions']):
+            for i_g, phase in enumerate(phase_shifts['positions'][0]):
                 if phase is None or phase < 1e-12:
                     continue
                 y, x = dl * i_l, dg * i_g

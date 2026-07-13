@@ -63,7 +63,6 @@ class CircuitGate:
         self.dt     = dt
         self.device = device
         self.d      = Nmax + 1
-        self.ops    = BosonOperatorsTorch(Nmax, device=device)
 
     def apply_to(
         self,
@@ -293,6 +292,7 @@ class NonlinearLocalGate(CircuitGateOneSite):
     ):
         """Initialise the gate and compute the initial gate tensor."""
         super().__init__(Nmax, dt, device)
+        self.ops    = BosonOperatorsTorch(Nmax, device=device)
         self.update(U, Delta)
 
     def update(
@@ -342,6 +342,7 @@ class PhaseGate(CircuitGateOneSite):
     ):
         """Initialise the gate with phase ``phi`` and compute the gate tensor."""
         super().__init__(Nmax, dt, device)
+        self.ops    = BosonOperatorsTorch(Nmax, device=device)
         self.update(phi)
 
     def get_params(self) -> List[torch.Tensor]:
@@ -407,6 +408,8 @@ class NonlinearCouplingGate(CircuitGateTwoSite):
     ):
         """Pre-compute Hamiltonian structure terms and call update(J, U, Delta)."""
         super().__init__(Nmax=Nmax, dt=dt, device=device)
+
+        self.ops = BosonOperatorsTorch(Nmax, device=device)
 
         # Parameter-independent rank-4 Hamiltonian components
         self.tunneling_gate = -(
@@ -489,9 +492,50 @@ class HaarCouplingGate(CircuitGateTwoSite):
 
     def __init__(self, Nmax: int = 1, device: str = "cuda:0"):
         """Draw a Haar-random unitary and store it as the fixed gate tensor."""
-        self.Nmax        = Nmax
-        self.device      = device
-        self.d           = Nmax + 1
+        super().__init__(Nmax=Nmax, dt=1., device=device)
 
         haar             = Haar_unitary(n=self.d ** 2, device=device)
         self.gate_tensor = haar.view(*([self.d] * 4)).permute([0, 1, 3, 2])
+
+from src.utils import general_two_qubit_gate
+class GeneralTwoQubitGate(CircuitGateTwoSite):
+    """
+    Two-mode parametrizable universal qubit gate, using Cartan (KAK) decomposition.
+    
+    Structure:
+
+    U   =   (A1⊗A2) ⋅ N(θx,θy,θz) ⋅ (B1⊗B2) 
+
+
+    A1, A2, B1, B2 ​∈ SU(2):
+        arbitrary single-qubit gates before/after — 4 x 3 = 12 parameters
+        
+        The 3 parameters:     
+            alpha   : rotation angle about n_hat.
+            theta_n : polar angle of the rotation axis n_hat (0 <= theta_n <= pi).
+            phi_n   : azimuthal angle of the rotation axis n_hat (0 <= phi_n <= 2*pi).
+
+    N(θx,θy,θz) = exp[i(θx XX + θy YY + θz ZZ)]:
+        the nonlocal core, exactly 3 parameters, carrying all the entangling power of the gate
+
+    params: 15-length real tensor (with requires_grad=True for optimization).
+        A1 (3), A2 (3), tx, ty, tz, B1 (3), B2 (3) -> 15 params, in the given order
+
+    Parameters
+    ----------
+    params   : The parameters for Cartan decomposition.
+    device : Torch device string.
+    """
+
+    def __init__(self, params, device: str = "cuda:0"):
+
+        super().__init__(Nmax=2, dt=1., device=device)
+        self.update(params)
+
+    def update(self, params):
+
+        # get the 4x4 matrix representation
+        U_mat = general_two_qubit_gate(params, device=self.device)
+
+        # store as rank-4 gate tensor
+        self.U = U_mat.view(*([self.d] * 4)).permute([0, 1, 3, 2])

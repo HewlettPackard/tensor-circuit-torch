@@ -579,7 +579,8 @@ class MPDOtorch:
 
         for i in range(L):
             # diagonal element: local expectation of the operator product
-            C[i, i] = self.local_expectation(op_diag, i)
+            C_ii = self.local_expectation(op_diag, i)
+            C[i, i] = C_ii.real if is_hermitian else C_ii
 
             # open the environment(s) at the anchor site i
             B_resc = irescale(self._B[i], self.SL[i], ind=-3)
