@@ -234,7 +234,7 @@ def Haar_unitary(n: int, device: str = 'cpu') -> torch.Tensor:
 # Parametrized SU(4) definition (Cartan KAK decomposition)
 # ---------------------------------------------------------------------------
 
-def su2_ZYZ(theta: torch.Tensor, phi: torch.Tensor, lam: torch.Tensor, device: str='cpu'):
+def su2(theta: torch.Tensor, phi: torch.Tensor, lam: torch.Tensor, device: str='cpu'):
     """Single-qubit SU(2) gate via ZYZ Euler decomposition."""
     c, s = torch.cos(theta / 2), torch.sin(theta / 2)
     return torch.stack([
@@ -242,7 +242,8 @@ def su2_ZYZ(theta: torch.Tensor, phi: torch.Tensor, lam: torch.Tensor, device: s
         torch.stack([torch.exp(1j * phi) * s, torch.exp(1j * (phi + lam)) * c]),
     ]).to(device)
 
-def su2(alpha: torch.Tensor, theta_n: torch.Tensor, phi_n: torch.Tensor, device: str = 'cpu'):
+
+def su2_axis(alpha: torch.Tensor, theta_n: torch.Tensor, phi_n: torch.Tensor, device: str = 'cpu'):
     """
     Single-qubit SU(2) gate via axis-angle (Bloch rotation) parametrization.
 
@@ -286,7 +287,7 @@ def canonical_core(tx: torch.Tensor, ty: torch.Tensor, tz: torch.Tensor, device:
     H = tx * XX + ty * YY + tz * ZZ
     return torch.matrix_exp(1j * H)
 
-def general_two_qubit_gate(params: torch.Tensor, device: str='cpu'):
+def general_two_qubit_gate(params: List[torch.Tensor], device: str='cpu'):
     """
     params: 15-length real tensor (with requires_grad=True for optimization).
     

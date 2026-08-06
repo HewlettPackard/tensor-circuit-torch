@@ -11,11 +11,17 @@
             "program": "${file}",
             "console": "integratedTerminal"
         },   
-                {
-            "name": "MZI_SPG",
+        {
+            "name": "ising-unitary",
             "type": "debugpy",
             "request": "launch",
-            "module": "experiments.single_coupler_SPG.nonlinear_MZI_torch"
+            "module": "experiments.ising_solver.run_ising_solver_unitary"
+        },
+        {
+            "name": "ising-single",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "experiments.ising_solver.run_ising_solver_single"
         },
         {
             "name": "g2-experiment",

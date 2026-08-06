@@ -22,7 +22,9 @@ import numpy as np
 import torch
 from scipy.special import factorial
 
-from src.mpdo_circuit import CouplerCircuit, CircuitTopology, MPDOCircuit, PhaseCircuit
+from src.mpdo_circuit import (
+    CouplerCircuit, CircuitTopology, MPDOCircuit, PhaseCircuit, QubitCartanCircuit
+)
 from src.circuit_gates import (
     HaarCouplingGate,
     NonlinearCouplingGate,
@@ -444,10 +446,11 @@ def create_haar_random_circuit(
     )
 
 
+from src.circuit_gates import GeneralTwoQubitGate
 def create_qubit_circuit(
     num_layers:   int,
     num_channels: int,
-    params:       List[List[List[float]]],
+    params:       List[List[List[torch.Tensor]]],
     gamma:        float = 0.,
     device:       str   = "cuda:0",
 ) -> MPDOCircuit:
@@ -470,20 +473,21 @@ def create_qubit_circuit(
     -------
     MPDOCircuit
     """
-    # K_ops = None if gamma < 1e-4 else dephasing_krauss_ops(gamma, device=device)
+    K_ops = None if gamma < 1e-4 else dephasing_krauss_ops(gamma, device=device)
 
-    # circuit_topology = [[None] * num_channels for _ in range(num_layers)]
-    # for d in range(num_layers):
-    #     for l in range(num_channels - 1):
-    #         if (d + l) % 2 == 0:
-    #             circuit_topology[d][l] = HaarCouplingGate(Nmax=Nmax, device=device)
+    circuit_topology = [[None] * num_channels for _ in range(num_layers)]
+    for d in range(num_layers):
+        for l in range(num_channels - 1):
+            if (d + l) % 2 == 0:
+                pars = params[d][l]
+                if len(pars) != 15:
+                    ValueError("params should have 15 parameters per gate.")
+                circuit_topology[d][l] = GeneralTwoQubitGate(params=pars, device=device)
 
-    # return MPDOCircuit(
-    #     circuit_topology=CircuitTopology(circuit_topology),
-    #     K_ops=K_ops,
-    # )
-
-    return 0
+    return QubitCartanCircuit(
+        circuit_topology=CircuitTopology(circuit_topology),
+        K_ops=K_ops,
+    )
 
 
 # ---------------------------------------------------------------------------

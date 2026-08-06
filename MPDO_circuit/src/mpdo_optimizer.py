@@ -12,7 +12,7 @@ clamp             : in-place parameter clamping helper
 """
 
 from time import time
-from typing import Any, Callable, Iterable, List
+from typing import Any, Callable, Iterable, List, Tuple
 
 import numpy as np
 import torch
@@ -78,10 +78,12 @@ def epoch_optimize(
         if (iter_alternate is not None
                 and epoch % (iter_alternate[0] + iter_alternate[1]) >= iter_alternate[0]):
             optimizer_run = optimizer_alt
-            print(f'\nRunning alt epoch {epoch + 1}...')
+            if epoch_print is not None:
+                print(f'\nRunning alt epoch {epoch + 1}...')
         else:
             optimizer_run = optimizer
-            print(f'\nRunning opt epoch {epoch + 1}...')
+            if epoch_print is not None:
+                print(f'\nRunning opt epoch {epoch + 1}...')
 
         if is_lbfgs:
             # --- LBFGS: requires a closure ---
@@ -139,7 +141,7 @@ def epoch_optimize(
         if scheduler is not None:
             scheduler.step()
 
-        if epoch % epoch_print == 0:
+        if epoch_print is not None and epoch % epoch_print == 0:
             print(f"Epoch {epoch + 1} finished in {time() - epoch_start:.2f}s, "
                   f"objective: {loss.item():.6e}")
             print(f"Total runtime: {time() - start:.2f}s")
@@ -262,13 +264,44 @@ def sweeping_optimize(
 # Helper
 # ---------------------------------------------------------------------------
 
-def clamp(optimizer: torch.optim.Optimizer, param_lims: List[float]) -> None:
+# def clamp(optimizer: torch.optim.Optimizer, param_lims: Tuple[float] | List[Tuple[float]]) -> None:
+#     """
+#     Clamp all parameters in `optimizer` into the range [param_lims[0], param_lims[1]].
+
+#     Called after each optimizer step when phase or coupling parameters must
+#     remain within a physically meaningful interval.
+#     """
+#     for group in optimizer.param_groups:
+#         for p in group['params']:
+#             p.data.clamp_(param_lims[0], param_lims[1])
+
+def clamp(
+    optimizer: torch.optim.Optimizer,
+    param_lims: Tuple[float, float] | List[Tuple[float, float]],
+) -> None:
     """
-    Clamp all parameters in `optimizer` into the range [param_lims[0], param_lims[1]].
+    Clamp all parameters in `optimizer` into physically meaningful ranges.
+
+    If `param_lims` is a single (lo, hi) tuple, it is applied to every
+    parameter. If it is a list of (lo, hi) tuples, it must have one entry
+    per parameter (in the order `optimizer.param_groups` iterates them),
+    and each parameter is clamped to its own range.
 
     Called after each optimizer step when phase or coupling parameters must
     remain within a physically meaningful interval.
     """
-    for group in optimizer.param_groups:
-        for p in group['params']:
-            p.data.clamp_(param_lims[0], param_lims[1])
+    params = [p for group in optimizer.param_groups for p in group['params']]
+
+    if isinstance(param_lims, tuple):
+        lims = [param_lims] * len(params)
+    else:
+        lims = param_lims
+        if len(lims) != len(params):
+            raise ValueError(
+                f"param_lims has {len(lims)} entries but optimizer has "
+                f"{len(params)} parameters"
+            )
+
+    with torch.no_grad():
+        for p, (lo, hi) in zip(params, lims):
+            p.clamp_(lo, hi)

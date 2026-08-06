@@ -67,6 +67,10 @@ class MPDOtorch:
         SL:                "List[torch.Tensor] | None" = None,
         SP:                "List[torch.Tensor] | None" = None,
         no_canonical_form: bool                        = False,
+        options: dict = {
+            'max_BD': 100, 'max_PD': 100,
+            'cutoff_BD': 1e-6, 'cutoff_PD': 1e-6,
+        }
     ):
         """Construct MPDO from site tensors; canonicalise unless SL/SP are supplied."""
         self.d            = psis[1].shape[-2]   # physical dimension
@@ -81,7 +85,7 @@ class MPDOtorch:
             self.SP     = [None] *  self.num_channels
             self.SL[0]  = torch.tensor([1.], device=self.device)
             self.SL[-1] = torch.tensor([1.], device=self.device)
-            self.canonical_form()
+            self.canonical_form(options)
         else:
             self.SL = SL
             self.SP = SP
@@ -177,6 +181,7 @@ class MPDOtorch:
             Q, R = torch.linalg.qr(iregroup(B_kraus, [[0, 1, 2], [3]]), mode='reduced')
 
             self._B[il] = Q.view(B_kraus.shape)
+            #self._B[il] = Q.view(B.shape[:3] + Q.shape[-1:])
             self.SP[il] = s_purity
 
             if il != L - 1:
@@ -928,6 +933,37 @@ class StateCreator:
     # Single-mode states
     # ------------------------------------------------------------------
 
+    def single_mode_state(self, coeffs: Iterable[complex], device: "str | None" = None, direct: bool = False) -> torch.Tensor:
+        """
+        Single-mode state |psi⟩ = \sum c_i |i>.
+
+        Parameters
+        ----------
+        coeffs      : the coefficient c_i, must be of same length as d.
+        to     : Torch device string; None → keep on default device.
+        direct : if True, return the bare 1-D coefficient vector without
+                 bond or batch indices (useful for outer products).
+
+        Returns
+        -------
+        torch.Tensor
+            If ``direct=True``: 1-D complex vector of length d.
+            Otherwise: tensor of shape (num_batch, 1, d, 1) (with batch
+            axis) or (1, d, 1) (without).
+        """
+        state = torch.tensor(
+            coeffs,
+            dtype=torch.complex128, device=device,
+        )
+        if direct:
+            return state
+
+        state = torch.unsqueeze(torch.unsqueeze(state, 0), -1)
+        if self.num_batch is not None:
+            state = state.repeat(self.num_batch, *([1] * len(state.shape)))
+
+        return state if device is None else state.to(device)
+
     def fock(self, n: int, to: "str | None" = None, direct: bool = False) -> torch.Tensor:
         """
         Single-mode Fock state |n⟩.
@@ -1022,7 +1058,8 @@ class StateCreator:
         if self.num_batch is not None:
             state = state.repeat(self.num_batch, *([1] * len(state.shape)))
 
-        return state if to is None else state.to(to)
+        return state if device is None else state.to(device)
+
 
     def two_mode_NOON(
         self,
@@ -1066,6 +1103,31 @@ class StateCreator:
     # ------------------------------------------------------------------
     # Product states
     # ------------------------------------------------------------------
+
+    def product_state(
+            self,
+            coeffs: Iterable[Iterable[float]],
+            device: "str | None" = None,
+            direct: bool         = False,
+    ) -> List[torch.Tensor]:
+        """
+        Generate any product state |psi_0⟩ ⊗ |psi_1⟩ ⊗ …
+
+        Parameters
+        ----------
+        coeffs   : iterable of photon numbers, one per channel.
+        device : target device.
+        direct : passed through to ``fock``; if True each tensor is a bare
+                 1-D vector.
+
+        Returns
+        -------
+        List[torch.Tensor]
+            One site tensor per channel.
+        """
+
+        return [self.single_mode_state(c, device=device, direct=direct) for c in coeffs]
+
 
     def product_state_fock(
         self,

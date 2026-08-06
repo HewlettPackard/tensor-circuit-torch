@@ -136,9 +136,9 @@ class SVDTrunc(Function):
             torch.tensor([1], device=A.device),
         )
 
-        U_trunc  = U[..., :, :bdim]
-        s_trunc  = s[..., :bdim]
-        Vd_trunc = Vd[..., :bdim, :]
+        U_trunc  = U[..., :, :bdim].clone()
+        s_trunc  = s[..., :bdim].clone()
+        Vd_trunc = Vd[..., :bdim, :].clone()
 
         # Normalise retained SVs
         normalize_factor = s_trunc.norm(dim=-1)

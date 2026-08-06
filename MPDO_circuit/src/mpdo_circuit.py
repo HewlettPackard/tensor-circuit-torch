@@ -400,3 +400,36 @@ class PhaseCircuit(MPDOCircuit):
             ]
             for d in range(self.num_layers)
         ]
+    
+
+class QubitCartanCircuit(MPDOCircuit):
+
+    def __init__(
+        self,
+        circuit_topology: CircuitTopology,
+        K_ops: "List[Iterable[torch.Tensor]] | None" = None,
+    ):
+        """Delegate to MPDOCircuit.__init__; no additional state."""
+        super().__init__(circuit_topology, K_ops)
+
+    def update(
+        self,
+        params: List[List[List[torch.Tensor]]]
+        ):
+
+        for d, gates_layer in enumerate(self.circuit_topology):
+            for l, gate in enumerate(gates_layer):
+                if gate is not None:
+                    gate.update(params[d][l])
+
+    def get_params(self):
+
+        return [
+            [
+                self.circuit_topology.gates[d][l].params     
+                if self.circuit_topology.gates[d][l] is not None else None    
+                for l in range(self.num_channels)
+            ]
+            for d in range(self.num_layers)
+        ]
+

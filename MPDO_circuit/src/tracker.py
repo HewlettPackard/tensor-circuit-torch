@@ -7,7 +7,7 @@ optimisation, with built-in plotting and pickle persistence.
 
 import pickle
 from collections.abc import MutableMapping
-from typing import Any, Iterator, Tuple
+from typing import Any, Iterator, Tuple, List
 
 import matplotlib.pyplot as plt
 import torch
@@ -108,6 +108,8 @@ class Tracker(MutableMapping):
         labels:    "list | None"   = None,
         filename:  "str | None"    = None,
         figsize:   Tuple[int, int] = (6, 3),
+        title:      "str | None" = None,
+        ylim:       "List[float] | None" = None
     ) -> None:
         """
         Plot one or more logged series on a single figure.
@@ -129,12 +131,20 @@ class Tracker(MutableMapping):
             else:
                 plt.plot(self._results[k], label=label)
 
-        plt.legend(loc='lower left')
+        plt.legend(loc='best')
         plt.xlabel("iter")
+        if title is not None:
+            plt.title(title)
+        if ylim is not None:
+            plt.ylim(ylim)
+
+
         plt.tight_layout()
 
         if filename is None:
             plt.show()
         else:
             plt.savefig(filename)
-            plt.close()
+        plt.close()
+
+        return None

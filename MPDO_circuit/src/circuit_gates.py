@@ -158,6 +158,18 @@ class CircuitGateOneSite(CircuitGate):
         """
         rho[site] = torch.einsum("ij,bkjl->bkil", self.gate_tensor, rho[site])
 
+    
+    def set_gate_tensor(
+            self, 
+            gate_tensor: torch.Tensor,
+            is_unitary: True
+        ) -> None:
+
+        self.gate_tensor = gate_tensor
+        self.d = gate_tensor.shape[0]
+        self.Nmax = self.d - 1
+        self.is_unitary = is_unitary
+
 
 # ---------------------------------------------------------------------------
 # Two-mode base
@@ -527,15 +539,21 @@ class GeneralTwoQubitGate(CircuitGateTwoSite):
     device : Torch device string.
     """
 
-    def __init__(self, params, device: str = "cuda:0"):
+    def __init__(self, params: List[torch.Tensor], device: str = "cuda:0"):
 
-        super().__init__(Nmax=2, dt=1., device=device)
+        super().__init__(Nmax=1, dt=1., device=device)
         self.update(params)
 
-    def update(self, params):
+    def update(self, params: List[torch.Tensor]):
+
+        self.params = params
 
         # get the 4x4 matrix representation
         U_mat = general_two_qubit_gate(params, device=self.device)
 
-        # store as rank-4 gate tensor
-        self.U = U_mat.view(*([self.d] * 4)).permute([0, 1, 3, 2])
+        # store as rank-4 gate tensor (with correct index permutations)
+        self.gate_tensor = U_mat.view(*([self.d] * 4)).permute([0, 1, 3, 2])
+
+    def get_params(self):
+        return [var for var in self.params if var.requires_grad]
+    
