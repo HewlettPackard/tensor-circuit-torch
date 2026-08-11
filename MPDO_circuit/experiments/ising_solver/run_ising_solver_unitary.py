@@ -15,7 +15,7 @@ from src.create_circuit import create_qubit_circuit
 from src.tracker import Tracker
 from src.mpdo_optimizer import epoch_optimize
 from experiments.ising_solver.utils import (
-    iter_func, read_ising_instance, get_zz_rz_params
+    iter_func, read_ising_instance
 )
 import numpy as np
 import argparse
@@ -29,7 +29,7 @@ FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # timestamp for data storage
 TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
-#TIMESTAMP = 'test'
+TIMESTAMP = 'test'
 
 
 
@@ -173,7 +173,8 @@ def iter_func(
     Z_lim: float = 1.,
     verbose: bool = False,
     schedule_coeffs: Callable | None = None,
-    z_thres: float = 0.0
+    z_thres: float = 0.0,
+    K_samples: int = 10
     ):
 
     ##################################
@@ -208,8 +209,8 @@ def iter_func(
     corrs.fill_diagonal_(0.)
 
     # discretized <Z_i> -> s_i
-    spins = Z_expect.sign() * (Z_expect.abs() > z_thres)
-    E_disc = spins @ J_mat @ spins
+    spins_disc = Z_expect.sign() * (Z_expect.abs() > z_thres)
+    E_disc = spins_disc @ J_mat @ spins_disc
 
     # compute entanglement penalty (mean square entropy profile)
     entropy_profile = rho.entropy_profile()
@@ -220,12 +221,33 @@ def iter_func(
         + Z_abs_weight * torch.relu(torch.abs(Z_expect) - Z_lim).pow(2).sum()
     ) / (1. + entropy_weight + Z_abs_weight)
 
-    # store outcomes
+    # sample bit strings
+    bs_top = rho.sample_outcome(max=True)
+    spins_top = 1. - 2 * bs_top
+    E_top = spins_top @ J_mat @ spins_top
+
+    E_sample = 0.
+    spins_sample = torch.zeros_like(spins_top)
+    for _ in range(K_samples):
+        bs = rho.sample_outcome(max=False)
+        spins_test_sample = 1. - 2 * bs # convert bits to spins!
+        E_case = spins_test_sample @ J_mat @ spins_test_sample
+        if E_case < E_sample:
+            E_sample = E_case if E_case < E_sample else E_sample
+            spins_sample = spins_test_sample
+
+
+    # store information of epochs
     tracker.add('FOM', FOM)
     tracker.add('E', E)
     tracker.add('E_zz', E_zz)
     tracker.add('E_x', E_x)
     tracker.add('E_disc', E_disc)
+    tracker.add('E_sample', E_sample)
+    tracker.add('E_top', E_top)
+    tracker.add('spins_disc', spins_disc)
+    tracker.add('spins_sample', spins_sample)
+    tracker.add('spins_top', spins_top)
     tracker.add('target', target)
     tracker.add('entropy_penalty', entropy_penalty)
     tracker.add('Z_expect', Z_expect)
@@ -240,15 +262,15 @@ def iter_func(
         filename=os.path.join(save_dir, 'FOM.png'))
 
     tracker.visualize(
-        ['E_zz', 'E_disc', 'target'],
+        ['E_zz', 'E_disc', 'E_top', 'E_sample', 'target'],
         filename=os.path.join(save_dir, 'E.png'),
-        title=f"target: {target:.2f}, E_zz: {E_zz:.2f}, E_disc: {E_disc:.2f}",
+        title=f"target: {target:.0f}, E_zz: {E_zz:.2f}, E_disc: {E_disc:.0f}, E_top: {E_top:.0f}, E_sample: {E_sample:.0f}",
         ylim=[None, 1.])
 
     tracker.visualize(
         ['E', 'E_zz', 'E_x'],
         filename=os.path.join(save_dir, 'E_contr.png'),
-        title=f"target: {target:.2f}, E: {E:.2f}, E_zz: {E_zz:.2f}, , E_x: {E_x:.2f}",
+        title=f"target: {target:.0f}, E: {E:.2f}, E_zz: {E_zz:.2f}, , E_x: {E_x:.2f}",
         ylim=[None, 1.])
 
     tracker.visualize(
@@ -303,7 +325,7 @@ def iter_func(
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--instance", type=int, required=True)
+    parser.add_argument("--instance", type=int, required=False, default=0)
     parser.add_argument("--timestamp", type=str, default=datetime.now().strftime('%Y%m%d_%H%M%S'))
     parser.add_argument("--num_threads", type=int, default=1)
     args = parser.parse_args()
@@ -316,8 +338,8 @@ if __name__ == "__main__":
     instance = args.instance
     prefix = 'g05'
     theta_start = 1 * np.pi / 2 
-    eps_theta = 0. * np.pi / 2
-    hx_eta = 0.
+    eps_theta = 0. * np.pi / 2 # fluctuations on start initial y-axis rotation (theta)
+    hx_eta = 0. # disorder in magnetic field
     
     PD = 1 # purity dimension
     BD = 2 # bond dimension
@@ -330,7 +352,7 @@ if __name__ == "__main__":
     
 
     # directory to store data
-    SAVE_DIR = os.path.join(FILE_DIR, "data", TIMESTAMP, f"instance_{instance}")
+    SAVE_DIR = os.path.join(FILE_DIR, "data", args.timestamp, f"instance_{instance}")
 
 
 
@@ -360,17 +382,17 @@ if __name__ == "__main__":
     for il in range(num_channels):
         Bl = list_ten[il]
 
-        dim_l = np.min([
+        dim_l = min(
             BD, 
             2 ** il,
             2 ** (num_channels - il),  
-            ])
+            )
         
-        dim_r = np.min([
+        dim_r = min(
             BD, 
             2 ** (il + 1), 
             2 ** (num_channels - il - 1), 
-            ])
+            )
 
         pad = (
             0, dim_r - 1,
@@ -384,7 +406,8 @@ if __name__ == "__main__":
 
     rho = MPDOtorch(list_ten, options={
             'max_BD': BD, 'max_PD': PD,
-            'cutoff_BD': -1, 'cutoff_PD': -1,
+            'cutoff_BD': -1, 'cutoff_PD': -1, 
+            'lowrank': False
         })
 
 
@@ -393,7 +416,7 @@ if __name__ == "__main__":
 
     # set torch seed (for random magnetic fields to break symmetry)
     torch.manual_seed(seed)
-    hx = (1. + hx_eta * (0.5 - torch.rand(num_channels))) * num_edge / num_channels / 2 # transverse field (normalize with num_edges)
+    hx = (1. + hx_eta * (0.5 - torch.rand(num_channels))) * num_edge / num_channels / 4 # transverse field (normalize with num_edges)
 
     # the scheduler
     max_epochs = options_ADAM.pop('max_epochs')

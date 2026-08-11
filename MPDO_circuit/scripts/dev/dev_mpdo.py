@@ -86,7 +86,7 @@ if __name__ == "__main__":
     print(rf"Finished run in {time.time()-start:.2f}s")
 
     # print output
-    ns = rho.number_outcomes()
+    ns = rho.number_expectations()
     tot_ns = ns.sum()
 
     print("\nCircuit output:\n")

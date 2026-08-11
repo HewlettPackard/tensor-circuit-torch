@@ -41,7 +41,7 @@ def run_MZI(rho: MPDOtorch, d: Dict[str, Any], options: Dict[str, Any]):
     circuit.run(rho, options)
 
     # compute observables
-    ns = rho.number_outcomes()
+    ns = rho.number_expectations()
     g2s = rho.density_correlations(n_eps=1e-5)
 
     return ns, g2s

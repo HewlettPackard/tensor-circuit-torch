@@ -149,7 +149,7 @@ class MPDOCircuit:
                 if gate is not None:
                     gate.apply_to(rho, site=l, options=options)
                     if verbose:
-                        print(f"\n iter ({d},{l}) — N_tot = {rho.number_outcomes().sum()}")
+                        print(f"\n iter ({d},{l}) — N_tot = {rho.number_expectations().sum()}")
                         print([rt.shape for rt in rho._B])
 
             if self.K_ops is not None and self.K_ops[d] is not None:

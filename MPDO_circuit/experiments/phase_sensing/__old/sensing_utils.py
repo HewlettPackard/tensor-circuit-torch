@@ -29,8 +29,8 @@ def Gaussian_Fisher_information(
             ) -> torch.Tensor:
 
     if i_check is None:
-        n1 = rho_1.number_outcomes()
-        n2 = rho_2.number_outcomes()
+        n1 = rho_1.number_expectations()
+        n2 = rho_2.number_expectations()
 
         sigma1 = rho_1.number_variances()
 
@@ -42,8 +42,8 @@ def Gaussian_Fisher_information(
         return GFIs.sum()
     
     else:
-        n1 = rho_1.number_outcome(i_check)
-        n2 = rho_2.number_outcome(i_check)
+        n1 = rho_1.number_expectation(i_check)
+        n2 = rho_2.number_expectation(i_check)
 
         sigma1 = rho_1.number_variance(i_check)
 
@@ -72,7 +72,7 @@ def homodyne_Fisher_information(
     # the variance field square <a^2> and intensity <ad * a>
     op_a2 = ops.a @ ops.a
     a21 = rho1.local_expectation(op_a2, i_check)
-    n1 = rho1.number_outcomes() if i_check is None else rho1.number_outcome(i_check)
+    n1 = rho1.number_expectations() if i_check is None else rho1.number_expectation(i_check)
 
     # the variance
     var_S = 2. * ((a21 - a1 ** 2) * np.exp(2j * phi)).real + (2. * (n1 - a1 * a1.conj()) + 1.).real

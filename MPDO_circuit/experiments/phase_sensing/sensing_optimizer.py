@@ -68,7 +68,7 @@ def iter_func(
 
     # store QFI
     QFI = quantum_Fisher_information(rho, rho_dtheta, d_theta)
-    ns_phase = rho.number_outcomes()
+    ns_phase = rho.number_expectations()
     SvN_phase = rho.entropy_profile()
     visualize_number_distribution(ns_phase, figname=os.path.join(SAVE_DIR, 'numbers_phase'))
     visualize_entropy(SvN_phase, figname=os.path.join(SAVE_DIR, 'entropy'))
@@ -82,8 +82,8 @@ def iter_func(
 
     # Gaussian FI
     ops = BosonOperatorsTorch(Nmax)
-    expect_n = rho.number_outcomes()
-    diff_n = (expect_n - rho_dtheta.number_outcomes()) / d_theta
+    expect_n = rho.number_expectations()
+    diff_n = (expect_n - rho_dtheta.number_expectations()) / d_theta
     Sigma_n = rho.correlation_matrix(ops.n) - torch.outer(expect_n, expect_n)
     diff_n = diff_n.to(Sigma_n.dtype)
     GFI_intensity = (diff_n @ Sigma_n.inverse() @ diff_n).real 

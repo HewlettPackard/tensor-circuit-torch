@@ -215,7 +215,7 @@ class CircuitGateTwoSite(CircuitGate):
         self,
         rho:     MPDOtorch,
         site:    int,
-        options: Dict[str, Any] = {'max_BD': 100, 'cutoff_BD': 1e-8},
+        options: Dict[str, Any] = {'max_BD': 100, 'cutoff_BD': 1e-8, 'lowrank': False},
     ) -> None:
         """
         Apply the two-site gate to ``rho`` and SVD-truncate the bond.
@@ -249,7 +249,7 @@ class CircuitGateTwoSite(CircuitGate):
             iregroup(theta, [[0, 1, 2], [3, 4, 5]]),
             cutoff=options['cutoff_BD'],
             max_num=options['max_BD'],
-            lowrank=False,
+            lowrank=options['lowrank'],
         )
 
         # Left tensor: project C onto the new basis defined by Vd

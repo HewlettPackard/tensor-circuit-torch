@@ -126,7 +126,7 @@ if __name__ == "__main__":
     print(rf"Finished init run in {time.time()-start:.2f}s")
 
     # print output
-    ns = rho.number_outcomes()
+    ns = rho.number_expectations()
     vars = rho.number_variances()
     g2s = rho.density_correlations(n_eps=1e-3)
 

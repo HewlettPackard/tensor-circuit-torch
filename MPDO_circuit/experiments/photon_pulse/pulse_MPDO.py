@@ -169,7 +169,7 @@ if __name__ == "__main__":
 
     sample_idx = 0
     if 0 in collect_inds:
-        density_collect[sample_idx] = rho.number_outcomes().to(store_device)
+        density_collect[sample_idx] = rho.number_expectations().to(store_device)
         a_expect_collect[sample_idx] = rho.local_expectations(ops.a).to(store_device)
         S_vN_collect[sample_idx] = rho.entropy_profile().to(store_device)
         S_p_collect[sample_idx] = rho.entropy_profile(entropy='purity').to(store_device)
@@ -196,12 +196,12 @@ if __name__ == "__main__":
 
         print(f"BD: {rho.get_BD(nz // 2)}, \
               PD: {rho.get_PD(nz // 2)}, \
-              N_ph: {rho.number_outcomes().sum()}")
+              N_ph: {rho.number_expectations().sum()}")
 
         if i_step + 1 in collect_inds:
             print(f"Collecting results {sample_idx}/{num_collect}")
 
-            density_collect[sample_idx] = rho.number_outcomes().to(store_device)
+            density_collect[sample_idx] = rho.number_expectations().to(store_device)
             a_expect_collect[sample_idx] = rho.local_expectations(ops.a).to(store_device)
             S_vN_collect[sample_idx] = rho.entropy_profile().to(store_device)
             S_p_collect[sample_idx] = rho.entropy_profile(entropy='purity').to(store_device)

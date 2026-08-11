@@ -247,7 +247,7 @@ if __name__ == "__main__":
         circuit.run(rho_in, options=options)
 
         # Collect output observables
-        ns  = rho_in.number_outcomes()
+        ns  = rho_in.number_expectations()
         g2s = rho_in.density_correlations(n_eps_g2)
         print(
             rf"vg[{i:02d}]={vg:.2f} µm/ps | {time.time()-start:.2f}s | "

@@ -56,7 +56,7 @@ def iter_func(
    
     # compute g2
     idx_signal = 1
-    ns = rho_run.number_outcomes()
+    ns = rho_run.number_expectations()
     g2s = rho_run.density_correlations(n_eps=1e-5)
 
     # store outcomes

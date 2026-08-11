@@ -153,6 +153,7 @@ class MPDOtorch:
         L        = self.num_channels
         do_kraus = len(K_ops) > 0
         K_concat = torch.stack(K_ops, dim=0) if do_kraus else None
+        lowrank = options['lowrank'] if 'lowrank' in options else True
 
         # Pass 1: L→R — purity SVD
         B = (self._B[0] if self.SL[0] is None
@@ -171,7 +172,7 @@ class MPDOtorch:
                 B_full.reshape(B_full.shape[0], -1),
                 cutoff=options['cutoff_PD'],
                 max_num=options['max_PD'],
-                lowrank=True,
+                lowrank=lowrank,
             )
 
             # Purity-truncated site tensor, then QR for left-orthogonality
@@ -197,7 +198,7 @@ class MPDOtorch:
                 iregroup(B, [[0], [1, 2, 3]]),
                 cutoff=options['cutoff_BD'],
                 max_num=options['max_BD'],
-                lowrank=True,
+                lowrank=lowrank,
             )
 
             self.SL[il] = s
@@ -343,7 +344,7 @@ class MPDOtorch:
             self._B[il].conj(),
         ).real
 
-    def number_outcome(self, il: int) -> torch.Tensor:
+    def number_expectation(self, il: int) -> torch.Tensor:
         """
         Mean photon number ⟨n̂⟩ at site ``il``.
 
@@ -372,7 +373,7 @@ class MPDOtorch:
         torch.Tensor
             Real scalar variance of the photon number at site ``il``.
         """
-        n      = self.number_outcome(il)
+        n      = self.number_expectation(il)
         n2_els = torch.arange(0, self.d, device=self.device, dtype=torch.float64) ** 2
         n2     = self.diagonal_local_measurement(il, n2_els)
         return n2 - n ** 2
@@ -396,12 +397,12 @@ class MPDOtorch:
         torch.Tensor
             Real scalar g²(0) at site ``il``.
         """
-        n     = self.number_outcome(il)
+        n     = self.number_expectation(il)
         n_els = torch.arange(0, self.d, device=self.device, dtype=torch.float64)
         C2    = self.diagonal_local_measurement(il, n_els * (n_els - 1.0))
         return (C2 + n_eps ** 2) / (n ** 2 + n_eps ** 2)
 
-    def number_outcomes(self) -> torch.Tensor:
+    def number_expectations(self) -> torch.Tensor:
         """
         Mean photon numbers ⟨n̂_l⟩ stacked over all sites.
 
@@ -410,7 +411,7 @@ class MPDOtorch:
         torch.Tensor
             1-D real tensor of length ``num_channels``.
         """
-        return torch.stack([self.number_outcome(il) for il in range(self.num_channels)])
+        return torch.stack([self.number_expectation(il) for il in range(self.num_channels)])
 
     def number_variances(self) -> torch.Tensor:
         """
@@ -622,6 +623,38 @@ class MPDOtorch:
 
         return C
 
+
+    # ------------------------------------------------------------------
+    # State samplers
+    # ------------------------------------------------------------------
+
+    def sample_outcome(self, max=False):
+
+        L = torch.diag(self.SL[0])
+        outcome = torch.zeros(self.num_channels, dtype=self.dtype, device=self.device)
+
+        for il, B in enumerate(self._B):
+
+            # get conditioned probabilities at site il
+            probs = torch.einsum("ij, bilm, bjlm -> l", L, B, B.conj()).real
+            probs = torch.clamp(probs, min=0.0) # make sure positive
+
+            # sample the index and store
+            n_sample = (
+                torch.argmax(probs) if max == True 
+                else torch.multinomial(probs, num_samples=1).int()
+            )
+
+            outcome[il] = n_sample
+
+            # create new environment
+            B_sample = B.select(-2, n_sample)
+            L = torch.einsum("ij, bir, bjp -> rp", L, B_sample, B_sample.conj())
+            L = L / L.trace()
+
+        return outcome.real
+
+  
 
     # ------------------------------------------------------------------
     # Two-site helpers

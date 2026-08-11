@@ -141,7 +141,7 @@ def iter_func(
 
     # compute g2
     idx_signal = rho_run.num_channels // 2
-    ns = rho_run.number_outcomes()
+    ns = rho_run.number_expectations()
     g2s = rho_run.density_correlations(n_eps=1e-5)
     rel_phi = obj_params[1][0][0] - obj_params[1][0][-1]
 

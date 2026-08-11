@@ -111,7 +111,7 @@ def iter_func(
 
     # store QFI
     QFI = quantum_Fisher_information(rho, rho_dtheta, d_theta)
-    ns_phase = rho.number_outcomes()
+    ns_phase = rho.number_expectations()
     SvN_phase = rho.entropy_profile()
     SNL = 4. * ns_phase[
         np.where([circuit_phase.circuit_topology[0, i] for i in range(circuit_phase.num_channels)])[0][0]
@@ -158,14 +158,14 @@ def iter_func(
             )
         
         # visualization of number outcomes
-        ns_out = rho.number_outcomes()
+        ns_out = rho.number_expectations()
         visualize_number_distribution(ns_out, figname=os.path.join(SAVE_DIR, 'numbers_read'))
 
         # save last tracker
         tracker.save(os.path.join(SAVE_DIR, 'data'))
 
         if verbose:
-            print(f'n_i: {rho.number_outcomes().detach().cpu().numpy()}')
+            print(f'n_i: {rho.number_expectations().detach().cpu().numpy()}')
             print(f'QFI: {QFI}, PFI: {PFI}, GFI: {GFI}, HFI: {HFI}')
             print(f"BDs: {rho.get_BDs()}")
             #print(f"thetas: {[circuit_phase.circuit_topology[0][l].phi.float() for l in range(num_channels)]}")
