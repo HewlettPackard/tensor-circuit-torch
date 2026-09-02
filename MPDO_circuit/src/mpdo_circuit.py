@@ -334,6 +334,29 @@ class CouplerCircuit(MPDOCircuit):
         ]
 
 
+    def get_phaseshift_matrix(self) -> list:
+            """
+            Dimensionless gate angles J·Δt for all NonlinearCouplingGate layers.
+    
+            This is the quantity that appears in the circuit diagram and is
+            directly comparable across different time-step sizes.
+    
+            Returns
+            -------
+            List[List[float | None]]
+                J·dt at each (layer, site); None for non-coupler positions.
+            """
+            return [
+                [
+                    self.circuit_topology[d, l].phi.item() * self.circuit_topology[d, l].dt
+                    if isinstance(self.circuit_topology[d, l], PhaseGate)
+                    else None
+                    for l in range(self.num_channels)
+                ]
+                for d in range(self.num_layers)
+            ]
+
+
 # ---------------------------------------------------------------------------
 # PhaseCircuit
 # ---------------------------------------------------------------------------

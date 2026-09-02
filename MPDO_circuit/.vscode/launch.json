@@ -10,7 +10,19 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal"
-        },   
+        },  
+        {
+            "name": "sat",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "experiments.MIP.SAT.run_sat"
+        }, 
+        {
+            "name": "heralded-sp",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "experiments.heralded_sp.state_gen"
+        },
         {
             "name": "ising-unitary",
             "type": "debugpy",

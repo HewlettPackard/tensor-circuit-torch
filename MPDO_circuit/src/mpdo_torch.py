@@ -79,6 +79,7 @@ class MPDOtorch:
         self.num_channels = len(psis)
         self.device       = psis[0].device
         self.dtype        = psis[0].dtype
+        self.options      = options
 
         if SL is None and SP is None:
             self.SL     = [None] * (self.num_channels + 1)
@@ -89,6 +90,8 @@ class MPDOtorch:
         else:
             self.SL = SL
             self.SP = SP
+
+    
 
     # ------------------------------------------------------------------
     # Canonicalisation
@@ -291,7 +294,66 @@ class MPDOtorch:
     # Local measurements
     # ------------------------------------------------------------------
 
-    def ptrace(self, il: int) -> torch.Tensor:
+    def ptrace(self, sites: int | Iterable[int]) -> torch.Tensor:
+        """
+        Reduced density matrix on `sites`.
+
+        Traces out every mode not in `sites`. Sites need not be contiguous:
+        any mode strictly between min(sites) and max(sites) that isn't itself
+        requested is contracted away (traced out) as part of the sweep.
+
+        Parameters
+        ----------
+        sites : int | Iterable[int]
+            Site index (single-site RDM) or sites to keep (multi-site RDM),
+            0-based, negative indices allowed.
+
+        Returns
+        -------
+        torch.Tensor
+            Complex density matrix. Single site -> shape (d, d). n requested
+            sites -> shape (d, d, ..., d, d) with 2n legs, ordered
+            (row_0, col_0, row_1, col_1, ..., row_{n-1}, col_{n-1}) following
+            sorted(sites).
+
+        Note
+        ----
+        Batch is summed (not averaged) at the final step, matching the existing
+        single-site convention above -- divide by self.batch_dim yourself if
+        you want the batch mean instead.
+        """
+        if isinstance(sites, int):
+            sites = [sites]
+
+        sites = sorted(s if s >= 0 else self.num_channels + s for s in sites)
+        i0, il = sites[0], sites[-1]
+
+        # leftmost requested site: contract batch-shared left bond,
+        # keep (phys_row, phys_col, right_ket, right_bra) open
+        rho_L = torch.einsum(
+            "bpjk,bplm->bjlkm",
+            irescale(self._B[i0], self.SL[i0] ** 2, ind=-3),
+            self._B[i0].conj(),
+        )
+
+        # sweep the span: trace out unrequested sites, append phys legs for requested ones
+        for i in range(i0 + 1, il + 1):
+            if i in sites:
+                rho_L = torch.einsum(
+                    "b...km,bkjn,bmlp->b...jlnp",
+                    rho_L, self._B[i], self._B[i].conj(),
+                )
+            else:
+                rho_L = torch.einsum(
+                    "b...km,bkjn,bmjp->b...np",
+                    rho_L, self._B[i], self._B[i].conj(),
+                )
+
+        # close the trailing bond and sum over batch
+        rho = torch.einsum("b...kk->...", rho_L)
+        return rho
+
+    def ptrace_depracate(self, il: int) -> torch.Tensor:
         """
         Single-site reduced density matrix ρ_il = Tr_{≠il}[ρ].
 
@@ -485,6 +547,7 @@ class MPDOtorch:
             1-D complex tensor of length ``num_channels``.
         """
         return torch.stack([self.local_expectation(op, il) for il in range(self.num_channels)])
+
     
     def correlation(
         self,
@@ -539,6 +602,7 @@ class MPDOtorch:
         )
 
         return corr
+
 
     def correlation_matrix(
         self,
@@ -623,6 +687,60 @@ class MPDOtorch:
 
         return C
 
+
+    def cumulant(self, ops: List[torch.tensor], sites: List[int]):
+
+        if len(ops) != len(sites):
+            ValueError("'ops' and 'ids' must be of same length!")
+
+        if len(sites) != len(set(sites)):
+            ValueError("All indices must be unique!")
+
+        # sort if needed
+        if not np.all(np.diff(sites) > 0):
+            sort_id = np.argsort(sites)
+            sites = [sites[i] for i in sort_id]
+            ops = [ops[i] for i in sort_id]
+
+        # compute cumulant
+        start, end = sites[0], sites[-1]
+
+
+        # open the environment at the left site, inserting op1
+        B_resc = irescale(self._B[start], self.SL[start], ind=-3)
+        G = torch.einsum(
+            "biqj, birk, qr -> jk",
+            B_resc, B_resc.conj(), ops[0],
+        )
+
+        # sweep the open bond-environment through the sites in between,
+        # tracing the ancilla/Kraus leg and the physical leg (identity) at each
+        i_op = 1
+        for m in range(start + 1, end):
+            B = self._B[m]
+
+            if m in sites:
+                G = torch.einsum(
+                    "jk, bjrm, bkqn, rq -> mn",
+                    G, B, B.conj(), ops[i_op],
+                )
+                i_op += 1
+            else:
+                G = torch.einsum(
+                    "jk, bjlm, bkln -> mn",
+                    G, B, B.conj(),
+                )
+
+        # close the environment at the right site, inserting final op
+        B = self._B[end]
+        corr = torch.einsum(
+            "jk, bjrm, bkqm, rq -> ",
+            G, B, B.conj(), ops[-1],
+        )
+
+        return corr
+
+        
 
     # ------------------------------------------------------------------
     # State samplers

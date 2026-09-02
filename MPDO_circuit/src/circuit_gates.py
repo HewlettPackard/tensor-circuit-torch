@@ -57,12 +57,19 @@ class CircuitGate:
     is_unitary:  bool         = True
     span:        "int | None" = None
 
-    def __init__(self, Nmax: int, dt: float = 1., device: str = "cuda:0"):
+    def __init__(
+            self, 
+            Nmax: int | None=None, 
+            op: torch.Tensor | None=None,
+            dt: float = 1., 
+            device: str = "cuda:0", 
+            ):
         """Set common gate attributes and initialise bosonic operators."""
-        self.Nmax   = Nmax
+        self.Nmax   = Nmax if Nmax is not None else op.shape[0]
         self.dt     = dt
         self.device = device
-        self.d      = Nmax + 1
+        self.d      = self.Nmax + 1
+        self.gate_tensor = op
 
     def apply_to(
         self,
@@ -249,7 +256,7 @@ class CircuitGateTwoSite(CircuitGate):
             iregroup(theta, [[0, 1, 2], [3, 4, 5]]),
             cutoff=options['cutoff_BD'],
             max_num=options['max_BD'],
-            lowrank=options['lowrank'],
+            lowrank=options['lowrank'] if 'lowrank' in options else False,
         )
 
         # Left tensor: project C onto the new basis defined by Vd
@@ -303,7 +310,7 @@ class NonlinearLocalGate(CircuitGateOneSite):
         device: str   = "cuda:0",
     ):
         """Initialise the gate and compute the initial gate tensor."""
-        super().__init__(Nmax, dt, device)
+        super().__init__(Nmax, dt=dt, device=device)
         self.ops    = BosonOperatorsTorch(Nmax, device=device)
         self.update(U, Delta)
 
@@ -353,7 +360,7 @@ class PhaseGate(CircuitGateOneSite):
         device: str   = "cuda:0",
     ):
         """Initialise the gate with phase ``phi`` and compute the gate tensor."""
-        super().__init__(Nmax, dt, device)
+        super().__init__(Nmax=Nmax, dt=dt, device=device)
         self.ops    = BosonOperatorsTorch(Nmax, device=device)
         self.update(phi)
 
