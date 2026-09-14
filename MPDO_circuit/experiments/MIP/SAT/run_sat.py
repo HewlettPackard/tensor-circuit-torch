@@ -52,7 +52,29 @@ def iter_func(
     # Compute objective
     ##################################
 
+    # cl = clauses
+    # rho._T = None
+
+    # t = time()
+    # E_cl_b = evaluate_clauses(rho, cl)
+    # t_cl_b = time() - t
+
+
+    # t = time()
+    # rho.precompute_transfer_matrices()
+    # t_pc = time() - t
+    # E_cl_pc = evaluate_clauses(rho, cl)
+    # t_cl_pc = time() - t_pc - t
+
+    # print(f"t_cl_b: {t_cl_b}")
+    # print(f"t_pc: {t_pc}")
+    # print(f"t_cl_pc: {t_cl_pc}")
+
+    # precompute and update transfer matrices for efficiency
+    # rho.precompute_transfer_matrices()
+
     # evaluate clauses
+    rho.reset_transer_matrix()
     E_clauses = evaluate_clauses(rho, clauses)
     E_err = E_clauses.sum()
 
@@ -222,11 +244,11 @@ if __name__ == "__main__":
     hx_eta = 0. # disorder in magnetic field
     
     PD = 1 # purity dimension
-    BD = 5 # bond dimension
+    BD = 10 # bond dimension
 
     seed = 42
     options_ADAM = { # solver options
-        'lr': 2e-2, 'lr_min': None, 'max_epochs': 200, 
+        'lr': 5e-2, 'lr_min': None, 'max_epochs': 200, 
         }
     verbose = True
     
@@ -286,7 +308,7 @@ if __name__ == "__main__":
 
     # set torch seed (for random magnetic fields to break symmetry)
     torch.manual_seed(seed)
-    hx = (1. + hx_eta * (0.5 - torch.rand(num_channels))) * n_clauses / num_channels / 4 # transverse field (normalize with num_edges)
+    hx = (1. + hx_eta * (0.5 - torch.rand(num_channels, device=device, dtype=torch.float64))) * n_clauses / num_channels / 4 # transverse field (normalize with num_edges)
     #schedule_coeff_h = lambda it: np.maximum(0.1, 1. - (it + 1) / (0.75 * max_epochs))
     schedule_coeff_h = lambda it: np.maximum(0., 1. - (it + 1) / (max_epochs))
 

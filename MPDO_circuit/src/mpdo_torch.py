@@ -31,6 +31,7 @@ from typing import Dict, Iterable, List, TypeVar, Tuple
 
 import numpy as np
 import torch
+from sortedcontainers import SortedDict
 
 from .utils import BosonOperatorsTorch, irescale, iregroup
 from .svd_trunc import svd_trunc
@@ -60,6 +61,10 @@ class MPDOtorch:
                         Use only when SL and SP are already known (e.g. after
                         cloning).
     """
+
+    # the transfer matrix between different tensors in the chain (to be precomputed for more efficiency)
+   # _T: Dict[Tuple[int,int], torch.Tensor] | None = None
+    _T = None # SortedDict(SortedDict()) can be initiated for efficient transfer matrix lookup table 
 
     def __init__(
         self,
@@ -290,6 +295,73 @@ class MPDOtorch:
             no_canonical_form=True,
         )
 
+
+    # def precompute_transfer_matrices(self):
+
+    #     self._T = {}
+
+    #     mat = torch.einsum("bijk, bljm -> ilkm", self._B[-2], self._B[-2].conj())
+
+    #     #self._T[self.num_channels-3]
+    #     self._T[(self.num_channels-3, self.num_channels-1)] = mat
+
+    #     for l in range(self.num_channels-2, 1, -1): # iterate backward
+
+    #         mat = torch.einsum("bijk, bljm -> ilkm", self._B[l-1], self._B[l-1].conj())
+    #         self._T[(l-2, l)] = mat
+
+    #         for m in range(l + 1, self.num_channels):
+    #             Tp = self._T[(l-1,m)]
+    #             self._T[(l-2,m)] = torch.einsum("ilkm, kmrs -> ilrs", mat, Tp)
+
+    @staticmethod
+    def _compose(T1: torch.Tensor, T2: torch.Tensor):
+        return torch.einsum("ilkm, kmrs -> ilrs", T1, T2)
+
+    def _atomic(self, i: int):
+        return torch.einsum("bijk, bljm -> ilkm", self._B[i], self._B[i].conj())
+
+    def get_transfer(self, i: int, j: int, store: bool=True):
+
+        if store and self._T is None:
+            self._T = SortedDict()
+
+        if store and i not in self._T:
+            self._T[i] = SortedDict()
+
+        if j - i < 1:
+            raise ValueError(f"j must be at least i+1, now i: {i} vs. j: {j}")
+
+        # loop through lookup table and apply
+        m = i
+        T_acc = None # the accumulated _T
+        while m <= j - 2:
+
+            # do storage and already an entry for _T[m]
+            if store and m in self._T and len(self._T[m]) > 0:
+                k = next(self._T[m].irange(maximum=j-1, reverse=True), None) # extract element as close as possible to end `j`
+                T_next = self._T[m][k] # the next transfer tensor 
+
+            # else compute next atomic element
+            else:
+                T_next = self._atomic(m + 1) # recompute the atomic element
+                k = m + 1
+
+            # T_acc
+            T_acc = T_next if T_acc is None else self._compose(T_acc, T_next)
+
+            if store:
+                self._T[i][k] = T_acc
+
+            m = k
+
+        return T_acc
+    
+
+    def reset_transer_matrix(self):
+        self._T = None
+
+        
     # ------------------------------------------------------------------
     # Local measurements
     # ------------------------------------------------------------------
@@ -353,7 +425,7 @@ class MPDOtorch:
         rho = torch.einsum("b...kk->...", rho_L)
         return rho
 
-    def ptrace_depracate(self, il: int) -> torch.Tensor:
+    def ptrace_deprecate(self, il: int) -> torch.Tensor:
         """
         Single-site reduced density matrix ρ_il = Tr_{≠il}[ρ].
 
@@ -688,13 +760,79 @@ class MPDOtorch:
         return C
 
 
-    def cumulant(self, ops: List[torch.tensor], sites: List[int]):
+    def cumulant_alt(self, ops: List[torch.tensor], sites: List[int]):
+
+        """
+        Compute a multi-point cumulant (correlation function) of local operators
+        acting on an MPDO (matrix product density operator).
+
+        Given operators ``ops[i]`` to be inserted at physical sites ``sites[i]``,
+        this evaluates
+
+            corr = Tr[ rho * op_0(site_0) * op_1(site_1) * ... * op_{n-1}(site_{n-1}) ]
+
+        by contracting a "bond environment" (a doubled matrix-product-state
+        environment on the ket/bra bond indices, with the purification/Kraus
+        leg `b` traced out) across the chain from the leftmost to the rightmost
+        involved site.
+
+        Two execution paths are supported, both organized around propagating a
+        transfer matrix through the chain:
+
+        1. **No precomputed transfer matrices (`self._T is None`):**
+        The environment tensor `G` (indices `j,k` on the ket/bra bond) is
+        built by opening the left boundary at the first site and inserting
+        `ops[0]`. It is then swept site-by-site through every intermediate
+        site between `start` and `end`: at sites where an operator is
+        inserted, `G` is contracted through the local ket/bra tensors with
+        that operator sandwiched on the physical leg; at all other sites,
+        `G` is contracted through the local ket/bra tensors with the
+        physical leg traced (identity channel), advancing the bond transfer
+        matrix by one site without changing its operator content. The
+        environment is finally closed at the last site by inserting
+        `ops[-1]` and tracing the outgoing bond indices, yielding the
+        scalar cumulant.
+
+        This path effectively constructs the site-to-site transfer matrix
+        on the fly, one site at a time, which is correct but repeats work
+        whenever the same span of "trivial" (no-operator) sites is
+        traversed for different operator queries.
+
+        2. **Precomputed transfer matrices (`self._T is not None`):**
+        Instead of stepping through every intermediate physical site, the
+        bond environment is advanced directly from one operator site to the
+        next using a cached transfer matrix `self._T[(i, j)]`, which
+        represents the pre-contracted (trivial, operator-free) propagation
+        of the bond environment between sites `i` and `j` with the physical
+        legs already traced out. At each operator site, `G` is first
+        jumped forward via the appropriate precomputed transfer matrix,
+        then contracted with the local ket/bra tensors and the operator at
+        that site — skipping the individual-site sweep entirely. After the
+        last operator is applied, the environment is closed by a direct
+        trace.
+
+        This trades the incremental per-site contraction in path 1 for a
+        single larger contraction per operator site, which is far cheaper
+        when cumulants/correlators are queried repeatedly across many
+        operator placements (e.g. sparse correlator scans), since the
+        "trivial" segments between operators need only be assembled once
+        and reused as `self._T`, rather than recomputed for every call.
+
+        Args:
+            ops: List of local operators to insert, one per site in `sites`.
+            sites: List of physical site indices at which to insert `ops`.
+                Automatically sorted (together with `ops`) into ascending
+                order if not already sorted.
+
+        Returns:
+            The scalar cumulant value (0-dimensional torch.Tensor).
+        """
 
         if len(ops) != len(sites):
-            ValueError("'ops' and 'ids' must be of same length!")
+            raise ValueError("'ops' and 'ids' must be of same length!")
 
         if len(sites) != len(set(sites)):
-            ValueError("All indices must be unique!")
+            raise ValueError("All indices must be unique!")
 
         # sort if needed
         if not np.all(np.diff(sites) > 0):
@@ -713,30 +851,122 @@ class MPDOtorch:
             B_resc, B_resc.conj(), ops[0],
         )
 
-        # sweep the open bond-environment through the sites in between,
-        # tracing the ancilla/Kraus leg and the physical leg (identity) at each
-        i_op = 1
-        for m in range(start + 1, end):
-            B = self._B[m]
+        # if no precomputed transfer matrix present, iterate through all intermediate tensors
+        if self._T is None:
 
-            if m in sites:
-                G = torch.einsum(
-                    "jk, bjrm, bkqn, rq -> mn",
-                    G, B, B.conj(), ops[i_op],
-                )
-                i_op += 1
-            else:
-                G = torch.einsum(
-                    "jk, bjlm, bkln -> mn",
-                    G, B, B.conj(),
-                )
+            # sweep the open bond-environment through the sites in between,
+            # tracing the ancilla/Kraus leg and the physical leg (identity) at each
+            i_op = 1
+            for m in range(start + 1, end):
+                B = self._B[m]
 
-        # close the environment at the right site, inserting final op
-        B = self._B[end]
-        corr = torch.einsum(
-            "jk, bjrm, bkqm, rq -> ",
-            G, B, B.conj(), ops[-1],
+                if m in sites:
+                    G = torch.einsum(
+                        "jk, bjrm, bkqn, rq -> mn",
+                        G, B, B.conj(), ops[i_op],
+                    )
+                    i_op += 1
+                else:
+                    G = torch.einsum(
+                        "jk, bjlm, bkln -> mn",
+                        G, B, B.conj(),
+                    )
+
+            # close the environment at the right site, inserting final op
+            B = self._B[end]
+            corr = torch.einsum(
+                "jk, bjrm, bkqm, rq -> ",
+                G, B, B.conj(), ops[-1],
+            )
+
+        # precomputed transfer matrices present
+        else: 
+
+            i_site_prev = sites[0]
+            for i_site, op in zip(sites[1:], ops[1:]):
+
+                # contract transfer matrix up to next site
+                if i_site - i_site_prev > 1:
+                    G = torch.einsum("ij, ijkl->kl", G, self._T[(i_site_prev, i_site)])
+
+                # contract operator at that site
+                B = self._B[i_site]
+                G = torch.einsum(
+                        "jk, bjrm, bkqn, rq -> mn",
+                        G, B, B.conj(), op
+                    )
+
+                # update previous site
+                i_site_prev = i_site
+
+            # contract last site (trace)
+            corr = torch.einsum("nn ->", G)
+
+
+        return corr
+
+    def cumulant(self, ops: List[torch.tensor], sites: List[int], store: bool=True):
+
+        """
+        Cumulant with possibility of using table lookup of transfer matrices
+
+        Args:
+            ops: List of local operators to insert, one per site in `sites`.
+            sites: List of physical site indices at which to insert `ops`.
+                Automatically sorted (together with `ops`) into ascending
+                order if not already sorted.
+
+        Returns:
+            The scalar cumulant value (0-dimensional torch.Tensor).
+        """
+
+        if len(ops) != len(sites):
+            raise ValueError("'ops' and 'ids' must be of same length!")
+
+        if len(sites) != len(set(sites)):
+            raise ValueError("All indices must be unique!")
+
+        # sort if needed
+        if not np.all(np.diff(sites) > 0):
+            sort_id = np.argsort(sites)
+            sites = [sites[i] for i in sort_id]
+            ops = [ops[i] for i in sort_id]
+
+        # compute cumulant
+        start, end = sites[0], sites[-1]
+
+
+        # open the environment at the left site, inserting op1
+        B_resc = irescale(self._B[start], self.SL[start], ind=-3)
+        G = torch.einsum(
+            "biqj, birk, qr -> jk",
+            B_resc, B_resc.conj(), ops[0],
         )
+
+        # if no precomputed transfer matrix present, iterate through all intermediate tensors
+        i_site_prev = start
+        for i_site, op in zip(sites[1:], ops[1:]):
+
+            if i_site - i_site_prev > 1:
+                # get transfer matrix
+                T_acc = self.get_transfer(i_site_prev, i_site)
+
+                # shift gauge by contracting transfer matrix compute new G
+                G = torch.einsum("ij, ijkl->kl", G, T_acc)
+
+            # contract operator at that site
+            B = self._B[i_site]
+            G = torch.einsum(
+                    "jk, bjrm, bkqn, rq -> mn",
+                    G, B, B.conj(), op
+                )
+
+            # update previous site
+            i_site_prev = i_site
+
+        # contract last site (trace)
+        corr = torch.einsum("nn ->", G)
+
 
         return corr
 
