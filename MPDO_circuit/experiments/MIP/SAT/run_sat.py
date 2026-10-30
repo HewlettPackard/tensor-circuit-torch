@@ -73,7 +73,7 @@ def iter_func(
     # precompute and update transfer matrices for efficiency
     # rho.precompute_transfer_matrices()
 
-    rho.reset_transer_matrix()
+    rho.reset_transfer_matrix()
 
     # evaluate clauses
     E_clauses = evaluate_clauses(rho, clauses, store=True, alt=alt_cumulant)

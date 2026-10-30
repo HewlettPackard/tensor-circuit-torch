@@ -123,9 +123,9 @@ class MPDOtorch:
                     cutoff_BD — relative SV cutoff for bond truncation
                     cutoff_PD — relative SV cutoff for purity truncation
         """
-        self.krauss_dissipation(K_ops=[], options=options)
+        self.kraus_dissipation(K_ops=[], options=options)
 
-    def krauss_dissipation(
+    def kraus_dissipation(
         self,
         K_ops:   Iterable[torch.Tensor],
         options: dict = {
@@ -358,7 +358,7 @@ class MPDOtorch:
         return T_acc
     
 
-    def reset_transer_matrix(self):
+    def reset_transfer_matrix(self):
         self._T = None
 
         
@@ -601,7 +601,7 @@ class MPDOtorch:
 
         B_resc = irescale(self._B[i], self.SL[i], ind=-3)
         return torch.einsum(
-            "biqj, birj, qr",
+            "biqj, birj, rq",
             B_resc, B_resc.conj(), op.to(B_resc.device),
         )
 
@@ -653,7 +653,7 @@ class MPDOtorch:
         # open the environment at the left site, inserting op1
         B_resc = irescale(self._B[start], self.SL[start], ind=-3)
         G = torch.einsum(
-            "biqj, birk, qr -> jk",
+            "biqj, birk, rq -> jk",
             B_resc, B_resc.conj(), op1.to(B_resc.device),
         )
 
@@ -669,7 +669,7 @@ class MPDOtorch:
         # close the environment at the right site, inserting op2
         B = self._B[end]
         corr = torch.einsum(
-            "jk, bjrm, bkqm, rq -> ",
+            "jk, bjrm, bkqm, qr -> ",
             G, B, B.conj(), op2.to(G.device),
         )
 
@@ -746,11 +746,11 @@ class MPDOtorch:
                 if not is_hermitian:
                     X2 = torch.einsum("jk, bjrm -> bkrm", G2, Bj)  # (batch, D, d, D)
 
-                C[i, j] = torch.einsum("bkrm, rq, bkqm -> ", X1, op2.to(device), Bj.conj())
+                C[i, j] = torch.einsum("bkrm, qr, bkqm -> ", X1, op2.to(device), Bj.conj())
                 if is_hermitian:
                     C[j, i] = C[i, j].conj()
                 else:
-                    C[j, i] = torch.einsum("bkrm, rq, bkqm -> ", X2, op1.to(device), Bj.conj())
+                    C[j, i] = torch.einsum("bkrm, qr, bkqm -> ", X2, op1.to(device), Bj.conj())
 
                 if j < L - 1:
                     G1 = torch.einsum("bkrm, bkrn -> mn", X1, Bj.conj())
@@ -763,6 +763,8 @@ class MPDOtorch:
     def cumulant_alt(self, ops: List[torch.tensor], sites: List[int]):
 
         """
+        OBSOLETE
+
         Compute a multi-point cumulant (correlation function) of local operators
         acting on an MPDO (matrix product density operator).
 
@@ -847,7 +849,7 @@ class MPDOtorch:
         # open the environment at the left site, inserting op1
         B_resc = irescale(self._B[start], self.SL[start], ind=-3)
         G = torch.einsum(
-            "biqj, birk, qr -> jk",
+            "biqj, birk, rq -> jk",
             B_resc, B_resc.conj(), ops[0],
         )
 
@@ -939,7 +941,7 @@ class MPDOtorch:
         # open the environment at the left site, inserting op1
         B_resc = irescale(self._B[start], self.SL[start], ind=-3)
         G = torch.einsum(
-            "biqj, birk, qr -> jk",
+            "biqj, birk, rq -> jk",
             B_resc, B_resc.conj(), ops[0],
         )
 
@@ -957,7 +959,7 @@ class MPDOtorch:
             # contract operator at that site
             B = self._B[i_site]
             G = torch.einsum(
-                    "jk, bjrm, bkqn, rq -> mn",
+                    "jk, bjrm, bkqn, qr -> mn",
                     G, B, B.conj(), op
                 )
 
