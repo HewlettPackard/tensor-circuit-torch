@@ -88,7 +88,7 @@ def load_cnf(filename: str) -> Tuple[int, int, List[Tuple[int, ...]]]:
     return n_vars, n_clauses_declared, clauses
 
 
-def evaluate_clauses(rho: MPDOtorch, clauses: List[Tuple[int,...]]) -> torch.Tensor:
+def evaluate_clauses(rho: MPDOtorch, clauses: List[Tuple[int,...]], store: bool=True, alt: bool=False) -> torch.Tensor:
 
     device = rho.device
     dtype = rho.dtype
@@ -104,7 +104,10 @@ def evaluate_clauses(rho: MPDOtorch, clauses: List[Tuple[int,...]]) -> torch.Ten
         ops = [P0 if l > 0 else P1 for l in cl]
         inds = [np.abs(l) - 1 for l in cl] # do not forget 0- vs 1-based indexing!
 
-        results.append(rho.cumulant(ops=ops, sites=inds).real)
+        if alt:
+             results.append(rho.cumulant_alt(ops=ops, sites=inds).real)
+        else:
+            results.append(rho.cumulant(ops=ops, sites=inds, store=store).real)
 
     return torch.stack(results)
 

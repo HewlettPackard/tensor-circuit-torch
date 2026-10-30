@@ -73,10 +73,13 @@ def iter_func(
     # precompute and update transfer matrices for efficiency
     # rho.precompute_transfer_matrices()
 
-    # evaluate clauses
     rho.reset_transer_matrix()
-    E_clauses = evaluate_clauses(rho, clauses)
+
+    # evaluate clauses
+    E_clauses = evaluate_clauses(rho, clauses, store=True, alt=alt_cumulant)
+
     E_err = E_clauses.sum()
+
 
     # the Pauli X operator
     X_op = torch.tensor([[0., 1.], [1., 0.]], device=rho.device, dtype=rho.dtype)
@@ -242,13 +245,14 @@ if __name__ == "__main__":
     theta_start = 1 * np.pi / 2 
     eps_theta = 0. * np.pi / 2 # fluctuations on start initial y-axis rotation (theta)
     hx_eta = 0. # disorder in magnetic field
+    alt_cumulant = False # compute cumulants without transfer matrix
     
     PD = 1 # purity dimension
-    BD = 10 # bond dimension
+    BD = 8 # bond dimension
 
     seed = 42
     options_ADAM = { # solver options
-        'lr': 5e-2, 'lr_min': None, 'max_epochs': 200, 
+        'lr': 5e-2, 'lr_min': None, 'max_epochs': 500, 
         }
     verbose = True
     

@@ -852,7 +852,7 @@ class MPDOtorch:
         )
 
         # if no precomputed transfer matrix present, iterate through all intermediate tensors
-        if self._T is None:
+        if True:
 
             # sweep the open bond-environment through the sites in between,
             # tracing the ancilla/Kraus leg and the physical leg (identity) at each
@@ -949,7 +949,7 @@ class MPDOtorch:
 
             if i_site - i_site_prev > 1:
                 # get transfer matrix
-                T_acc = self.get_transfer(i_site_prev, i_site)
+                T_acc = self.get_transfer(i_site_prev, i_site, store=store)
 
                 # shift gauge by contracting transfer matrix compute new G
                 G = torch.einsum("ij, ijkl->kl", G, T_acc)
